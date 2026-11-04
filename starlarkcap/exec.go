@@ -57,7 +57,9 @@ type Program struct {
 // CallEvent reports one capability call a script made. Each call reports
 // twice: when it starts (Done false; JobID set once the job exists) and
 // when it settles (Done true, with Err for a failed call). A call the
-// registry rejects before a job exists reports only the settled event.
+// registry rejects before a job exists reports only the settled event. A
+// jobs.start reports only the started event (the job may deliberately
+// outlive the Exec); a rejected jobs.start reports the settled one.
 type CallEvent struct {
 	Ref     string              `json:"ref"`
 	Pos     Position            `json:"pos"` // the call site in the script
@@ -158,6 +160,10 @@ func Exec(ctx context.Context, p Program, lim Limits, hooks Hooks) (Result, erro
 	defer stop()
 	obs := &observer{hooks: hooks}
 	predeclared := newGlobals(runCtx, obs).dict()
+	// `input` is Exec's own global (bound by script.Exec below): a
+	// capability namespace of that name would collide with the binding
+	// and fail every Exec. It stays reachable via call("input.…").
+	delete(predeclared, "input")
 	for name, v := range p.Predeclared {
 		if _, clash := predeclared[name]; clash || name == "input" {
 			return Result{}, &Error{Code: registry.Invalid, Message: fmt.Sprintf("host built-in %q collides with a capability global", name)}
@@ -196,8 +202,28 @@ type observer struct {
 
 func (o *observer) track(j *registry.Job) {
 	o.mu.Lock()
-	o.jobs = append(o.jobs, j)
+	// Only non-terminal jobs matter to cancelOpen; retaining every
+	// finished job (and, through it, its result and history) for the
+	// whole Exec would grow without bound in a chatty script.
+	kept := make([]*registry.Job, 0, len(o.jobs)+1)
+	for _, old := range o.jobs {
+		if !old.Status().State.Terminal() {
+			kept = append(kept, old)
+		}
+	}
+	o.jobs = append(kept, j)
 	o.mu.Unlock()
+}
+
+// started reports a jobs.start that created its job.
+func (o *observer) started(thread *sl.Thread, job *registry.Job) {
+	o.emit(CallEvent{Ref: job.Capability(), Pos: script.PositionOf(thread.CallFrame(1).Pos), JobID: job.ID()})
+}
+
+// rejected reports a call settled before any job existed (snapshot
+// rejection, a failed Start).
+func (o *observer) rejected(thread *sl.Thread, ref string, err error) {
+	o.emit(CallEvent{Ref: ref, Pos: script.PositionOf(thread.CallFrame(1).Pos), Done: true, Err: registry.Info(err)})
 }
 
 func (o *observer) cancelOpen() {

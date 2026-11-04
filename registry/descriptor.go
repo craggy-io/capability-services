@@ -63,14 +63,22 @@ func (e Entry) Descriptor() Descriptor {
 		o := e.Origin
 		origin = &o
 	}
+	// Slices are copied: a Descriptor crosses boundaries and may be held
+	// and mutated by its consumer.
+	examples := make([]Example, len(e.Examples))
+	for i, ex := range e.Examples {
+		ex.Input = append(json.RawMessage(nil), ex.Input...)
+		examples[i] = ex
+	}
 	return Descriptor{
 		Origin: origin,
 		Name:   e.Name, Version: e.Version, Ref: e.Capability.Ref(),
 		Title: e.Title, Description: e.Description, Input: in, Output: out,
-		Examples: e.Examples, Effects: effects, Tags: e.Tags, Supersedes: e.Supersedes,
-		Accepts: e.Accepts, Emits: e.Emits, Long: e.Long,
+		Examples: examples, Effects: effects,
+		Tags: append([]string(nil), e.Tags...), Supersedes: append([]string(nil), e.Supersedes...),
+		Accepts: append([]Subject(nil), e.Accepts...), Emits: append([]Subject(nil), e.Emits...), Long: e.Long,
 		HeartbeatMs: e.Heartbeat.Milliseconds(), HasCheck: e.Check != nil,
-		Current: e.Current, SupersededBy: e.SupersededBy, Group: e.Group,
+		Current: e.Current, SupersededBy: append([]string(nil), e.SupersededBy...), Group: e.Group,
 		Ready: e.Ready, CheckError: e.CheckError,
 	}
 }

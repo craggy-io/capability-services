@@ -28,8 +28,13 @@ projection has to pass it.
 | `test.echo` | `star.echo` | a plain read-only call |
 | `test.add` | `star.add` | typed input and output |
 | `test.fail` (`conflict: boom`) | `star.fail` (calls `test.fail`) | error envelopes; the script's failure is `internal` with `conflict: boom` in its message |
+| `test.deny` (`denied`) | `star.deny` (calls `test.deny`) | the `denied` code and its HTTP 403 mapping |
+| `test.full` (`unavailable`/`no_capacity`) | `star.full` (calls `test.full`) | reason and `retryable` in every envelope |
+| `test.admin` (tagged `admin`) | `star.admin` | view enforcement: invisible and `not_found` through a `Not(Tagged("admin"))` view |
+| `test.old` / `test.new` (supersedes `test.old`) | `star.old` / `star.new` | superseded entries leave listings, still answer, and carry the note/header |
+| `test.ver` (@1 and @2) | `star.ver` (@1 and @2) | pinned refs resolve to the named version everywhere |
 | `test.items.list` | `star.items.list` (calls `test.items.list`) | `Page` and cursors over `Items` |
-| `test.slow` (`Long`, staged progress) | `star.slow` (`Long`, delegates to `test.slow`) | job handles followed with `jobs.wait` |
+| `test.slow` (`Long`, staged progress) | `star.slow` (`Long`, `ctx.start`s `test.slow`) | job handles followed with `jobs.wait`, decoded status parity |
 | `test.unready` (check fails) | `star.unready` (script `check`) | readiness: hidden from tools, `unavailable` on call |
 
 For each set the suite takes the reference error from `Invoke` and requires every
@@ -76,7 +81,7 @@ sets agreeing on results while a script failure surfaces as `internal`:
 r, _ := conformance.NewRegistry()
 defer r.Close()
 loaded, _ := conformance.LoadScript(ctx, r)
-// loaded.Capabilities: star.echo@1 star.add@1 star.fail@1 star.items.list@1 star.slow@1 star.unready@1
+// loaded.Capabilities: star.echo@1 star.add@1 star.fail@1 star.deny@1 star.full@1 star.admin@1 star.old@1 star.new@1 star.ver@1 star.ver@2 star.items.list@1 star.slow@1 star.unready@1
 
 goOut, _ := r.Invoke(ctx, "test.add", json.RawMessage(`{"a":19,"b":23}`))   // {"sum":42}
 starOut, _ := r.Invoke(ctx, "star.add", json.RawMessage(`{"a":19,"b":23}`)) // {"sum":42}

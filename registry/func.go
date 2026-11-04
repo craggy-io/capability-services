@@ -177,6 +177,17 @@ func Func[In, Out any](name, title string, fn func(context.Context, In) (Out, er
 		if err != nil {
 			return nil, err
 		}
+		if outT == bytesType && !setsOut {
+			// The derived schema advertises a []byte result as a base64
+			// string, so pre-marshal it as one: the generic []byte path
+			// in encodeResult would otherwise reinterpret JSON-looking
+			// bytes as raw JSON that contradicts the schema.
+			raw, merr := json.Marshal(out)
+			if merr != nil {
+				return nil, WrapCode(Internal, merr)
+			}
+			return json.RawMessage(raw), nil
+		}
 		return out, nil
 	}
 	applyCapOpts(&c, opts)

@@ -1,8 +1,12 @@
 package registry
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"runtime"
 	"sort"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -59,6 +63,12 @@ type Registry struct {
 	stopCh   chan struct{}
 	stopOnce sync.Once
 	wg       sync.WaitGroup
+	loopGID  atomic.Int64 // goroutine id of loop(); Close from it must not wg.Wait itself
+	// stopCtx is cancelled by Close; readiness checks derive from it so a
+	// Close issued from inside a Check unblocks the loop waiting on that
+	// same check instead of deadlocking against wg.Wait.
+	stopCtx    context.Context
+	stopCancel context.CancelFunc
 
 	runners runnerSet // job runner goroutines still executing
 }
@@ -127,17 +137,30 @@ func New(opts ...Option) *Registry {
 			o.regFn(&cfg)
 		}
 	}
+	// A nil Middleware is a host bug that would otherwise panic every
+	// Start; drop it here rather than at call time.
+	mw := cfg.middleware[:0]
+	for _, m := range cfg.middleware {
+		if m != nil {
+			mw = append(mw, m)
+		}
+	}
+	cfg.middleware = mw
 	r := &Registry{
 		cfg: cfg, ready: map[capKey]readyState{},
 		changed: make(chan struct{}), jobs: map[string]*Job{},
 		sems: map[string]chan struct{}{}, stopCh: make(chan struct{}),
 	}
+	r.stopCtx, r.stopCancel = context.WithCancel(context.Background())
 	for tag, n := range cfg.limits {
 		r.sems[tag] = make(chan struct{}, n)
 	}
 	r.snap.Store(emptySnapshot())
 	r.allView = &View{reg: r, filter: All}
-	if cfg.checkEvery > 0 {
+	// The loop also purges finished jobs, so it runs when either periodic
+	// checks or job expiry is enabled; an invoke-only host with
+	// CheckEvery(0) must still honour KeepJobs.
+	if cfg.checkEvery > 0 || cfg.keepJobs > 0 {
 		r.wg.Add(1)
 		go r.loop()
 	}
@@ -157,6 +180,7 @@ func New(opts ...Option) *Registry {
 func (r *Registry) Close() {
 	r.stopOnce.Do(func() {
 		close(r.stopCh)
+		r.stopCancel()
 		r.jobsMu.Lock()
 		r.closed = true
 		jobs := make([]*Job, 0, len(r.jobs))
@@ -170,20 +194,61 @@ func (r *Registry) Close() {
 			}
 		}
 	})
-	r.wg.Wait()
+	// A Check running on the loop goroutine may itself call Close (the
+	// watcher-style self-close); waiting for the loop there would wait
+	// for ourselves forever.
+	if goid() != r.loopGID.Load() {
+		r.wg.Wait()
+	}
 	r.runners.wait(r.cfg.drainTimeout)
+}
+
+// goid returns the current goroutine's id, parsed from its stack header.
+// It exists only so Close can tell "called from the loop goroutine" apart
+// from any other caller; 0 never matches a real goroutine.
+func goid() int64 {
+	var buf [64]byte
+	n := runtime.Stack(buf[:], false)
+	fields := bytes.Fields(buf[:n]) // "goroutine <id> [...]"
+	if len(fields) < 2 {
+		return 0
+	}
+	id, err := strconv.ParseInt(string(fields[1]), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return id
 }
 
 func (r *Registry) loop() {
 	defer r.wg.Done()
-	t := time.NewTicker(r.cfg.checkEvery)
-	defer t.Stop()
+	r.loopGID.Store(goid())
+	var checkC, purgeC <-chan time.Time
+	if r.cfg.checkEvery > 0 {
+		t := time.NewTicker(r.cfg.checkEvery)
+		defer t.Stop()
+		checkC = t.C
+	}
+	if r.cfg.keepJobs > 0 {
+		every := r.cfg.keepJobs / 10
+		if every < 10*time.Millisecond {
+			every = 10 * time.Millisecond
+		}
+		if every > 30*time.Second {
+			every = 30 * time.Second
+		}
+		t := time.NewTicker(every)
+		defer t.Stop()
+		purgeC = t.C
+	}
 	for {
 		select {
 		case <-r.stopCh:
 			return
-		case <-t.C:
+		case <-checkC:
 			r.RefreshChecks(context.Background())
+			r.purgeJobs()
+		case <-purgeC:
 			r.purgeJobs()
 		}
 	}
@@ -238,10 +303,16 @@ func normalize(c Capability) (capKey, resolvedCap, error) {
 		return capKey{}, resolvedCap{}, err
 	}
 	c.Version = normVersion(c.Version)
-	c.Tags = append([]string(nil), c.Tags...)
-	c.Supersedes = append([]string(nil), c.Supersedes...)
+	// Duplicated tags are meaningless and, for a limited tag, harmful:
+	// runJob acquires the tag's semaphore once per occurrence.
+	c.Tags = dedupeStrings(c.Tags)
+	c.Supersedes = dedupeStrings(c.Supersedes)
 	c.Accepts = accepts
 	c.Emits = emits
+	// The snapshot is immutable, so it must own its schemas: a caller
+	// mutating the schema it registered must not rewrite validation.
+	c.Input = cloneSchema(c.Input)
+	c.Output = cloneSchema(c.Output)
 	inRes, err := resolveSchema(c.Input)
 	if err != nil {
 		return capKey{}, resolvedCap{}, Errorf(Invalid, "%s: input schema: %v", c.Name, err)
@@ -305,6 +376,64 @@ func buildSnapshot(caps map[capKey]resolvedCap) (*snapshot, error) {
 	return s, nil
 }
 
+// dedupeStrings copies in without duplicates, preserving order. Nil
+// stays nil.
+func dedupeStrings(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// cloneSchema deep-copies a schema through its JSON form (the schema's
+// whole meaning is its JSON document). An unmarshalable schema can only
+// come from hand-built cyclic pointers; fall back to a shallow copy then,
+// rather than aliasing the caller's value outright.
+func cloneSchema(s *jsonschema.Schema) *jsonschema.Schema {
+	if s == nil {
+		return nil
+	}
+	b, err := json.Marshal(s)
+	if err == nil {
+		var out jsonschema.Schema
+		if json.Unmarshal(b, &out) == nil {
+			return &out
+		}
+	}
+	cp := *s
+	return &cp
+}
+
+// cloneCapability returns a copy of c sharing nothing mutable with it:
+// slices, example payloads and schemas are all copied. Entry/Descriptor
+// consumers and view filters receive clones so handling a listing can
+// never rewrite the immutable snapshot — or race its readers.
+func cloneCapability(c Capability) Capability {
+	c.Tags = append([]string(nil), c.Tags...)
+	c.Supersedes = append([]string(nil), c.Supersedes...)
+	c.Accepts = append([]Subject(nil), c.Accepts...)
+	c.Emits = append([]Subject(nil), c.Emits...)
+	if c.Examples != nil {
+		ex := make([]Example, len(c.Examples))
+		for i, e := range c.Examples {
+			e.Input = append(json.RawMessage(nil), e.Input...)
+			ex[i] = e
+		}
+		c.Examples = ex
+	}
+	c.Input = cloneSchema(c.Input)
+	c.Output = cloneSchema(c.Output)
+	return c
+}
+
 func appendUnique(s []string, v string) []string {
 	for _, e := range s {
 		if e == v {
@@ -365,6 +494,10 @@ func (r *Registry) Add(caps ...Capability) error {
 		}
 		norm[k] = rc
 	}
+	// Readiness checks run host code: never under writeMu, where a Check
+	// that itself registers capabilities would self-deadlock and a slow
+	// Check would block every other registration.
+	results := r.runChecksFor(norm)
 	r.writeMu.Lock()
 	defer r.writeMu.Unlock()
 	cur := r.snap.Load()
@@ -380,7 +513,7 @@ func (r *Registry) Add(caps ...Capability) error {
 	for k, v := range norm {
 		merged[k] = v
 	}
-	return r.publishLocked(merged, keysOf(norm))
+	return r.publishLocked(merged, results)
 }
 
 // Replace atomically swaps everything under prefix: all capabilities whose
@@ -406,6 +539,7 @@ func (r *Registry) Replace(prefix string, caps ...Capability) error {
 		}
 		norm[k] = rc
 	}
+	results := r.runChecksFor(norm) // host code: outside writeMu, as in Add
 	r.writeMu.Lock()
 	defer r.writeMu.Unlock()
 	cur := r.snap.Load()
@@ -419,7 +553,7 @@ func (r *Registry) Replace(prefix string, caps ...Capability) error {
 	for k, v := range norm {
 		merged[k] = v
 	}
-	return r.publishLocked(merged, keysOf(norm))
+	return r.publishLocked(merged, results)
 }
 
 // Remove deletes refs: "name" removes all versions, "name@2" one version.
@@ -461,35 +595,34 @@ func (r *Registry) Remove(refs ...string) {
 		return
 	}
 	s.groups = cur.groups
-	r.snap.Store(s)
 	r.pruneReadyLocked(s)
+	r.snap.Store(s)
 	r.notify()
 }
 
-func keysOf(m map[capKey]resolvedCap) []capKey {
-	ks := make([]capKey, 0, len(m))
-	for k := range m {
-		ks = append(ks, k)
+// runChecksFor runs the readiness checks for a batch about to be added.
+// It runs host code, so callers invoke it before taking writeMu.
+func (r *Registry) runChecksFor(norm map[capKey]resolvedCap) map[capKey]readyState {
+	results := make(map[capKey]readyState, len(norm))
+	for k, rc := range norm {
+		results[k] = r.runCheck(rc.capab)
 	}
-	return ks
+	return results
 }
 
-// publishLocked validates the prospective snapshot, runs readiness checks
-// for the newly added capabilities, swaps the snapshot in and notifies.
-// Callers hold writeMu.
-func (r *Registry) publishLocked(caps map[capKey]resolvedCap, added []capKey) error {
+// publishLocked validates the prospective snapshot, installs the
+// readiness results the caller pre-ran for the newly added capabilities
+// (checks run before publishing so fresh List() results carry a real
+// Ready value and Invoke can fail fast), swaps the snapshot in and
+// notifies. Callers hold writeMu. Readiness is written before the
+// snapshot swap, so a reader that sees a new capability always sees its
+// check result too.
+func (r *Registry) publishLocked(caps map[capKey]resolvedCap, results map[capKey]readyState) error {
 	s, err := buildSnapshot(caps)
 	if err != nil {
 		return err
 	}
 	s.groups = r.snap.Load().groups
-	// Run checks before publishing so fresh List() results carry a real
-	// Ready value and Invoke can fail fast.
-	results := make(map[capKey]readyState, len(added))
-	for _, k := range added {
-		results[k] = runCheck(r.cfg, caps[k].capab)
-	}
-	r.snap.Store(s)
 	r.readyMu.Lock()
 	for k := range r.ready {
 		if _, ok := s.caps[k]; !ok {
@@ -497,9 +630,12 @@ func (r *Registry) publishLocked(caps map[capKey]resolvedCap, added []capKey) er
 		}
 	}
 	for k, v := range results {
-		r.ready[k] = v
+		if _, ok := s.caps[k]; ok {
+			r.ready[k] = v
+		}
 	}
 	r.readyMu.Unlock()
+	r.snap.Store(s)
 	r.notify()
 	return nil
 }

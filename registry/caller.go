@@ -21,6 +21,34 @@ const (
 	jobKey
 )
 
+// cloneCaller deep-copies c: the Attrs map and the whole Parent chain.
+// Anything stored on a Job or handed out in a JobStatus goes through it,
+// so neither the projection that built the Caller nor a status consumer
+// can rewrite recorded identity (or race a journal marshal). A cyclic or
+// over-deep Parent chain — which would break every JSON marshal of the
+// job — is truncated at the repeat.
+func cloneCaller(c Caller) Caller {
+	return cloneCallerSeen(c, map[*Caller]bool{}, 0)
+}
+
+func cloneCallerSeen(c Caller, seen map[*Caller]bool, depth int) Caller {
+	out := c
+	if c.Attrs != nil {
+		attrs := make(map[string]string, len(c.Attrs))
+		for k, v := range c.Attrs {
+			attrs[k] = v
+		}
+		out.Attrs = attrs
+	}
+	out.Parent = nil
+	if c.Parent != nil && depth < 32 && !seen[c.Parent] {
+		seen[c.Parent] = true
+		p := cloneCallerSeen(*c.Parent, seen, depth+1)
+		out.Parent = &p
+	}
+	return out
+}
+
 // WithCaller returns a context carrying c.
 func WithCaller(ctx context.Context, c Caller) context.Context {
 	return context.WithValue(ctx, callerKey, c)

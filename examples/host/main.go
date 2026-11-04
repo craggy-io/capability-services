@@ -30,14 +30,17 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -187,6 +190,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return err
 	}
 	log := log.New(stderr, "", log.LstdFlags)
+	// SIGINT/SIGTERM cancel ctx: the servers stop accepting, and the
+	// deferred closes below (MCP stop, Watcher.Close, Registry.Close,
+	// in that order) drain jobs instead of the process dying mid-job.
+	ctx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
 
 	// Example middleware: one audit line per call (in the host application this
 	// writes a storage Run; here it just logs). Note it records the exact
@@ -209,6 +217,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if err := r.Add(caps...); err != nil {
 		return err
 	}
+	if err := r.AddGroup(jobs.Group()); err != nil {
+		return err
+	}
 	// Supersession policy for script files: a file may always supersede
 	// capabilities under its own prefix; outside it, only what this filter
 	// admits. Here scripts may take over the legacy jadx.* tools, and
@@ -225,7 +236,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 	log.Printf("loaded apk.star (%s): %s", l.Digest, strings.Join(l.Capabilities, ", "))
 	if *scripts != "" {
-		w, err := starlarkcap.Watch(context.Background(), r, starlarkcap.WatchOptions{
+		w, err := starlarkcap.Watch(ctx, r, starlarkcap.WatchOptions{
 			Dir:  *scripts, // opened as an os.Root: no symlink escapes
 			Load: loadOpts,
 			OnResult: func(prefix string, l starlarkcap.Loaded, err error) {
@@ -253,6 +264,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	for _, e := range r.List() {
 		fmt.Fprintf(listing, "  %-28s %s\n", e.Capability.Ref(), e.Title)
 	}
+	fmt.Fprintln(listing, "groups:")
+	for _, g := range r.Groups() {
+		fmt.Fprintf(listing, "  %-28s %s\n", g.Name, g.Description)
+	}
 	fmt.Fprintln(listing, "hidden from List (superseded, still callable):")
 	for _, e := range r.All() {
 		if e.Superseded() {
@@ -272,7 +287,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		defer stop()
 		log.Printf("serving MCP on stdio (agent view: %d tools)", len(agents.List()))
 		transport := &mcpsdk.IOTransport{Reader: io.NopCloser(stdin), Writer: nopCloser{stdout}}
-		return server.Run(context.Background(), transport)
+		if err := server.Run(ctx, transport); err != nil && !errors.Is(err, context.Canceled) {
+			return err
+		}
+		return nil
 	}
 
 	api := r.View(registry.All)
@@ -282,6 +300,16 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		}
 		return registry.Caller{ID: "user:anonymous", Kind: "user"}
 	}))
+	srv := &http.Server{Addr: *addr, Handler: h}
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutdownCtx)
+	}()
 	log.Printf("serving HTTP on %s — open http://localhost%s/v1/ and /v1/openapi.json", *addr, *addr)
-	return http.ListenAndServe(*addr, h)
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
 }

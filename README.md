@@ -76,6 +76,12 @@ err := r.Add(
 err = r.Add(jobs.Capabilities()...) // jobs.list/get/wait/cancel
 err = r.AddGroup(jobs.Group())
 
+// Runtime-defined capabilities, under the "apk" prefix. Superseding a name
+// outside the prefix needs the host's policy.
+loaded, err := starlarkcap.Load(ctx, r, "apk",
+	starlarkcap.Source{Filename: "apk.star", Src: src},
+	starlarkcap.LoadOptions{MaySupersede: registry.Match("jadx.*")})
+
 agents := r.View(registry.And(
 	registry.Or(registry.Tagged("agent"), registry.Match("jobs.*")),
 	registry.Not(registry.Tagged("admin"))))
@@ -85,12 +91,6 @@ stop := mcp.Serve(mcpServer, agents)                             // MCP projecti
 http.Handle("/v1/", httpapi.Handler(api))                        // HTTP projection
 defs := tools.Defs(agents)                                       // in-process loop, re-list each turn
 globals := starlarkcap.Globals(registry.WithView(ctx, agents))   // Starlark built-ins
-
-// Runtime-defined capabilities, under the "apk" prefix. Superseding a name
-// outside the prefix needs the host's policy.
-loaded, err := starlarkcap.Load(ctx, r, "apk",
-	starlarkcap.Source{Filename: "apk.star", Src: src},
-	starlarkcap.LoadOptions{MaySupersede: registry.Match("jadx.*")})
 ```
 
 Here `mcp` is this module's `mcp` package (the example host imports it as

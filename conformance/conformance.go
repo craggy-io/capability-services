@@ -56,6 +56,29 @@ func Capabilities() []registry.Capability {
 			func(ctx context.Context, in echoIn) (echoIn, error) {
 				return echoIn{}, registry.Errorf(registry.Conflict, "boom")
 			}, registry.WithTags("agent")),
+		registry.Func("test.deny", "Always fails with denied",
+			func(ctx context.Context, in echoIn) (echoIn, error) {
+				return echoIn{}, registry.Errorf(registry.Denied, "not for you")
+			}, registry.WithTags("agent")),
+		registry.Func("test.full", "Always fails unavailable with a reason",
+			func(ctx context.Context, in echoIn) (echoIn, error) {
+				return echoIn{}, registry.WrapReason(registry.Unavailable, registry.ReasonNoCapacity, errors.New("pool full"))
+			}, registry.WithTags("agent")),
+		registry.Func("test.admin", "Admin-only echo",
+			func(ctx context.Context, in echoIn) (echoIn, error) { return in, nil },
+			registry.WithTags("admin")),
+		registry.Func("test.old", "Superseded echo",
+			func(ctx context.Context, in echoIn) (echoIn, error) { return in, nil },
+			registry.WithTags("agent")),
+		registry.Func("test.new", "Echo that supersedes test.old",
+			func(ctx context.Context, in echoIn) (echoIn, error) { return in, nil },
+			registry.WithSupersedes("test.old"), registry.WithTags("agent")),
+		registry.Func("test.ver", "Versioned echo v1",
+			func(ctx context.Context, in echoIn) (echoIn, error) { return echoIn{Text: "v1:" + in.Text}, nil },
+			registry.WithVersion(1), registry.WithTags("agent")),
+		registry.Func("test.ver", "Versioned echo v2",
+			func(ctx context.Context, in echoIn) (echoIn, error) { return echoIn{Text: "v2:" + in.Text}, nil },
+			registry.WithVersion(2), registry.WithTags("agent")),
 		registry.Func("test.items.list", "List items (paginated)",
 			func(ctx context.Context, in listIn) (registry.Page[string], error) {
 				return registry.Paginate(Items, registry.PageIn{Limit: in.Limit, Cursor: in.Cursor})
@@ -72,7 +95,7 @@ func Capabilities() []registry.Capability {
 				case <-ctx.Done():
 					return echoIn{}, ctx.Err()
 				}
-				registry.Progress(ctx, registry.Update{Stage: "run", Done: 1, Total: 1, Unit: "files"})
+				registry.Progress(ctx, registry.Update{Stage: "run", Done: 1, Total: 1, Unit: "files", Data: map[string]any{"tool": "fake"}})
 				registry.Progress(ctx, registry.Update{Stage: "finalise"})
 				return echoIn{Text: "done-" + in.Label}, nil
 			}, registry.AsLong(time.Second), registry.WithTags("agent")),
@@ -94,11 +117,13 @@ func NewRegistry() (*registry.Registry, error) {
 }
 
 // ScriptFile mirrors Capabilities in Starlark under the "star" prefix:
-// star.echo, star.add, star.fail, star.items.list, star.slow and
+// star.echo, star.add, star.fail, star.deny, star.full, star.admin,
+// star.old/star.new, star.ver, star.items.list, star.slow and
 // star.unready take the same inputs and return the same results as their
-// test.* counterparts (several by calling them through ctx.call). A
-// script's own failure is internal, so star.fail fails internal where
-// test.fail fails conflict; every projection must still agree.
+// test.* counterparts (several by calling them through ctx.call or
+// ctx.start). A script's own failure is internal, so star.fail fails
+// internal where test.fail fails conflict; every projection must still
+// agree.
 const ScriptFile = `
 def _echo(ctx, input):
     return {"text": input["text"]}
@@ -108,6 +133,7 @@ capability(
     title = "Echo text (script)",
     description = "Returns its input text.",
     input = {"text": schema.string(required = True)},
+    output = {"text": schema.string(required = True)},
     effects = ["read_only", "idempotent"],
     tags = ["agent"],
     run = _echo,
@@ -117,6 +143,7 @@ capability(
     name = "star.add",
     title = "Add two integers (script)",
     input = {"a": schema.integer(required = True), "b": schema.integer(required = True)},
+    output = {"sum": schema.integer(required = True)},
     effects = ["read_only"],
     tags = ["agent"],
     run = lambda ctx, input: {"sum": input["a"] + input["b"]},
@@ -131,6 +158,65 @@ capability(
 )
 
 capability(
+    name = "star.deny",
+    title = "Always fails with denied (script)",
+    input = {"text": schema.string(required = True)},
+    tags = ["agent"],
+    run = lambda ctx, input: ctx.call("test.deny", text = input["text"]),
+)
+
+capability(
+    name = "star.full",
+    title = "Always fails unavailable with a reason (script)",
+    input = {"text": schema.string(required = True)},
+    tags = ["agent"],
+    run = lambda ctx, input: ctx.call("test.full", text = input["text"]),
+)
+
+capability(
+    name = "star.admin",
+    title = "Admin-only echo (script)",
+    input = {"text": schema.string(required = True)},
+    tags = ["admin"],
+    run = _echo,
+)
+
+capability(
+    name = "star.old",
+    title = "Superseded echo (script)",
+    input = {"text": schema.string(required = True)},
+    tags = ["agent"],
+    run = _echo,
+)
+
+capability(
+    name = "star.new",
+    title = "Echo that supersedes star.old (script)",
+    input = {"text": schema.string(required = True)},
+    supersedes = ["star.old"],
+    tags = ["agent"],
+    run = _echo,
+)
+
+capability(
+    name = "star.ver",
+    version = 1,
+    title = "Versioned echo v1 (script)",
+    input = {"text": schema.string(required = True)},
+    tags = ["agent"],
+    run = lambda ctx, input: ctx.call("test.ver@1", text = input["text"]),
+)
+
+capability(
+    name = "star.ver",
+    version = 2,
+    title = "Versioned echo v2 (script)",
+    input = {"text": schema.string(required = True)},
+    tags = ["agent"],
+    run = lambda ctx, input: ctx.call("test.ver@2", text = input["text"]),
+)
+
+capability(
     name = "star.items.list",
     title = "List items, paginated (script)",
     input = {"limit": schema.integer(), "cursor": schema.string()},
@@ -141,7 +227,7 @@ capability(
 
 def _slow(ctx, input):
     ctx.progress(stage = "delegate", done = 0, total = 1, unit = "jobs")
-    out = ctx.call("test.slow", **input)
+    out = ctx.start("test.slow", **input).wait()["result"]
     ctx.progress(stage = "delegate", done = 1, total = 1, unit = "jobs")
     return {"text": out["text"]}
 

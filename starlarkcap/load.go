@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -53,8 +55,11 @@ type LoadOptions struct {
 	// MaySupersede is the supersession policy for refs outside the prefix:
 	// a capability may supersede any name under the prefix, and a name
 	// outside it only when MaySupersede admits it. The filter sees the
-	// registered capability the ref names when there is one, else a
-	// Capability with only Name set. nil admits nothing outside the prefix.
+	// registered capability the ref names. A ref naming nothing
+	// registered is denied outright: the policy cannot judge a capability
+	// it cannot see, and a dormant supersession would otherwise spring on
+	// whatever registers under that name later. Register the target
+	// first, then load. nil admits nothing outside the prefix.
 	MaySupersede registry.Filter
 }
 
@@ -87,9 +92,11 @@ const noEntry = "-"
 // One file owns one prefix. Load refuses with Conflict, naming the other
 // file, when r.Replace(prefix) would remove a capability another file
 // installed with Load (its Origin has Kind "script" and a different Ref),
-// as loading "a" from a.star would wipe a.b.* loaded from a.b.star. The
-// same file reloads freely, and Go-registered capabilities under the
-// prefix are replaced as before. Unload the other file first
+// as loading "a" from a.star would wipe a.b.* loaded from a.b.star — and
+// likewise when prefix overlaps a prefix another file already loaded (an
+// ancestor or descendant, in either order), which Load tracks per
+// registry. The same file reloads freely, and Go-registered capabilities
+// under the prefix are replaced as before. Unload the other file first
 // (r.Replace(its prefix)) to move capabilities between files. The check
 // and the Replace are not one atomic step: serialise concurrent Loads of
 // overlapping prefixes (Watch loads one file at a time).
@@ -167,7 +174,7 @@ func Load(ctx context.Context, r *registry.Registry, prefix string, src Source, 
 		if done.Load() {
 			return nil, fmt.Errorf("capability() is only valid while a file loads")
 		}
-		c, err := buildCapability(kwargs, lim, print, schemaOpts)
+		c, err := buildCapability(args, kwargs, lim, print, schemaOpts)
 		if err != nil {
 			return nil, err
 		}
@@ -214,14 +221,88 @@ func Load(ctx context.Context, r *registry.Registry, prefix string, src Source, 
 	if err := ownPrefix(r, prefix, filename); err != nil {
 		return Loaded{}, err
 	}
+	// Remember what Replace is about to remove, to roll back if the
+	// install-time supersession recheck fails.
+	var prev []registry.Capability
+	for _, e := range r.All() {
+		if underPrefix(prefix, e.Name) {
+			prev = append(prev, e.Capability)
+		}
+	}
 	if err := r.Replace(prefix, defs...); err != nil {
 		return Loaded{}, err
 	}
+	// The policy was checked while the file's top level ran, which can be
+	// minutes before this install: a target registered or re-tagged in
+	// between must pass it too. Re-check against the registry as it now
+	// stands and roll the install back on failure.
+	for _, c := range defs {
+		for _, ref := range c.Supersedes {
+			if err := maySupersede(all, prefix, c.Name, ref, opts.MaySupersede); err != nil {
+				_ = r.Replace(prefix, prev...)
+				return Loaded{}, err
+			}
+		}
+	}
+	ownersFor(r).record(prefix, filename)
 	return Loaded{Prefix: prefix, Digest: digest, Modules: res.Modules, Capabilities: refs, Diagnostics: warnings}, nil
 }
 
+// prefixOwners records, per registry, which file loaded which prefix.
+// Installed capabilities alone cannot answer that: a file that owns "a"
+// but defines only a.x leaves nothing under "a.b" for a nested a.b.star
+// to collide with, yet the nested load would make the owner's next
+// reload wipe a.b.* — refused here in either order. Entries whose file
+// no longer has anything installed under its prefix are pruned on the
+// next check, so unloading (r.Replace(prefix), which bypasses Load)
+// frees the prefix again.
+var prefixOwners sync.Map // *registry.Registry -> *ownerSet
+
+type ownerSet struct {
+	mu       sync.Mutex
+	byPrefix map[string]string // prefix -> filename
+}
+
+func ownersFor(r *registry.Registry) *ownerSet {
+	v, _ := prefixOwners.LoadOrStore(r, &ownerSet{byPrefix: map[string]string{}})
+	return v.(*ownerSet)
+}
+
+func (o *ownerSet) record(prefix, filename string) {
+	o.mu.Lock()
+	o.byPrefix[prefix] = filename
+	o.mu.Unlock()
+}
+
+// overlapsOther reports a recorded owner (prefix, file) of a prefix that
+// overlaps prefix (either is the other or under it), pruning records
+// whose file has nothing installed under its prefix any more.
+func (o *ownerSet) overlapsOther(r *registry.Registry, prefix, filename string) (string, string, bool) {
+	installed := func(p, file string) bool {
+		for _, e := range r.All() {
+			if underPrefix(p, e.Name) && e.Origin.Kind == originKind && e.Origin.Ref == file {
+				return true
+			}
+		}
+		return false
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	for p, file := range o.byPrefix {
+		if !installed(p, file) {
+			delete(o.byPrefix, p)
+			continue
+		}
+		if file != filename && (underPrefix(p, prefix) || underPrefix(prefix, p)) {
+			return p, file, true
+		}
+	}
+	return "", "", false
+}
+
 // ownPrefix refuses a load of filename under prefix when Replace(prefix)
-// would remove a capability another file installed with Load.
+// would remove a capability another file installed with Load, or when
+// prefix overlaps a prefix another file loaded.
 func ownPrefix(r *registry.Registry, prefix, filename string) error {
 	for _, e := range r.All() {
 		if underPrefix(prefix, e.Name) && e.Origin.Kind == originKind && e.Origin.Ref != filename {
@@ -229,6 +310,11 @@ func ownPrefix(r *registry.Registry, prefix, filename string) error {
 				"load %s: %s under the prefix %q was loaded from %s, and one file owns one prefix: unload %s first",
 				filename, e.Capability.Ref(), prefix, e.Origin.Ref, e.Origin.Ref)
 		}
+	}
+	if p, file, ok := ownersFor(r).overlapsOther(r, prefix, filename); ok {
+		return registry.Errorf(registry.Conflict,
+			"load %s: the prefix %q overlaps %q, which %s owns, and one file owns one prefix: unload %s first",
+			filename, prefix, p, file, file)
 	}
 	return nil
 }
@@ -267,8 +353,9 @@ func underPrefix(prefix, name string) bool {
 // maySupersede applies the supersession policy to one ref of capability
 // name. A pinned ref is checked against that version; a bare ref
 // supersedes every version, so each registered version must pass. A ref
-// naming nothing registered is checked as a Capability with only Name.
-// Malformed refs are left for the registry to reject.
+// naming nothing registered is denied (fail closed: see
+// LoadOptions.MaySupersede). Malformed refs are left for the registry to
+// reject.
 func maySupersede(all *registry.View, prefix, name, ref string, policy registry.Filter) error {
 	target, _, pinned, ok := registry.ParseRef(ref)
 	if !ok || underPrefix(prefix, target) {
@@ -287,7 +374,8 @@ func maySupersede(all *registry.View, prefix, name, ref string, policy registry.
 		}
 	}
 	if len(targets) == 0 {
-		targets = append(targets, registry.Capability{Name: target})
+		return registry.Errorf(registry.Denied,
+			"capability %s may not supersede %s: it is outside the prefix %q and is not registered, so LoadOptions.MaySupersede cannot judge it; register the target first", name, ref, prefix)
 	}
 	for _, c := range targets {
 		if policy == nil || !policy(c) {
@@ -336,10 +424,43 @@ func loadError(filename string, err error) error {
 	return &registry.Error{Code: code, Message: "load " + filename + ": " + msg, Err: err}
 }
 
-func buildCapability(kwargs []sl.Tuple, lim script.Limits, print func(*sl.Thread, string), schemaOpts []schema.Option) (registry.Capability, error) {
+// capabilityKwargs is the documented capability(...) parameter set.
+// Anything else is an error: a misspelled kwarg must never load with the
+// field silently unset (a dropped tags=[...] changes who can see the
+// capability).
+var capabilityKwargs = map[string]bool{
+	"name": true, "version": true, "title": true, "description": true,
+	"input": true, "output": true, "effects": true, "tags": true,
+	"supersedes": true, "accepts": true, "emits": true, "long": true,
+	"heartbeat": true, "run": true, "check": true,
+}
+
+func buildCapability(args sl.Tuple, kwargs []sl.Tuple, lim script.Limits, print func(*sl.Thread, string), schemaOpts []schema.Option) (registry.Capability, error) {
 	kw := map[string]sl.Value{}
 	for _, kv := range kwargs {
-		kw[string(kv[0].(sl.String))] = kv[1]
+		key := string(kv[0].(sl.String))
+		if !capabilityKwargs[key] {
+			return registry.Capability{}, fmt.Errorf("capability: unknown parameter %q", key)
+		}
+		kw[key] = kv[1]
+	}
+	// The documented signature is capability(name, ...): one positional
+	// name is allowed (and must agree with name= when both are given).
+	if len(args) > 1 {
+		return registry.Capability{}, fmt.Errorf("capability: at most one positional argument (name), got %d", len(args))
+	}
+	if len(args) == 1 {
+		s, ok := args[0].(sl.String)
+		if !ok {
+			return registry.Capability{}, fmt.Errorf("capability: name must be a string")
+		}
+		if v, dup := kw["name"]; dup {
+			if vs, isStr := v.(sl.String); !isStr || vs != s {
+				return registry.Capability{}, fmt.Errorf("capability: name given both positionally and by keyword")
+			}
+		} else {
+			kw["name"] = s
+		}
 	}
 	getString := func(key string) (string, error) {
 		v, ok := kw[key]
@@ -395,7 +516,10 @@ func buildCapability(kwargs []sl.Tuple, lim script.Limits, print func(*sl.Thread
 		if !ok {
 			return c, fmt.Errorf("capability: version must be an int")
 		}
-		iv, _ := n.Int64()
+		iv, ok := n.Int64()
+		if !ok || iv < 0 || iv > math.MaxInt32 {
+			return c, fmt.Errorf("capability: version %s is out of range", n.String())
+		}
 		c.Version = int(iv)
 	}
 	if v, ok := kw["input"]; ok && v != sl.None {
@@ -436,8 +560,8 @@ func buildCapability(kwargs []sl.Tuple, lim script.Limits, print func(*sl.Thread
 	}
 	if v, ok := kw["heartbeat"]; ok {
 		f, okF := sl.AsFloat(v)
-		if !okF {
-			return c, fmt.Errorf("capability: heartbeat must be a number of seconds")
+		if !okF || math.IsNaN(f) || math.IsInf(f, 0) || f < 0 || f > float64(math.MaxInt64)/float64(time.Second) {
+			return c, fmt.Errorf("capability: heartbeat must be a number of seconds in range")
 		}
 		c.Heartbeat = time.Duration(f * float64(time.Second))
 	}
@@ -548,7 +672,7 @@ func makeCheck(fn *sl.Function, lim script.Limits, print func(*sl.Thread, string
 			}
 			return fmt.Errorf("%s", string(v))
 		default:
-			return nil
+			return fmt.Errorf("check returned %s, want None, bool or string", out.Type())
 		}
 	}
 }

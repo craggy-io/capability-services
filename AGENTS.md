@@ -66,6 +66,9 @@ summarises) and the executable package examples (`*/example_test.go`), which
    wires it.
 
 Re-check from this module root (each command should print nothing unless noted).
+The `./...` forms need `script-services` resolvable (the Go workspace of the
+[README](README.md#development), or a tagged release once one exists); until
+then `go list` errors instead of printing, which is not a pass.
 Import audit 2026-11-04: rules 1-3 hold for every package in this module,
 `examples/host` included; rule 4 is checked in each domain module.
 
@@ -75,10 +78,10 @@ go list -f '{{range .Imports}}{{println .}}{{end}}' ./registry | grep '\.' | gre
 go list -f '{{range .Imports}}{{println .}}{{end}}' ./registry | grep 'craggy-io/capability-services'
 # 2. this module's packages each projection imports: registry everywhere, plus tools for mcp
 for p in jobs tools mcp httpapi starlarkcap; do echo "$p:" $(go list -f '{{range .Imports}}{{println .}}{{end}}' ./$p | grep 'craggy-io/capability-services/' | sed 's#.*/##'); done
-# 3. script-services importers among all packages, examples included: prints only .../starlarkcap
-go list -f '{{.ImportPath}}:{{range .Imports}} {{.}}{{end}}' ./... | grep 'craggy-io/script-services' | cut -d: -f1
+# 3. script-services importers among all packages, examples and test files included: prints only .../starlarkcap
+go list -f '{{.ImportPath}}:{{range .Imports}} {{.}}{{end}}{{range .TestImports}} {{.}}{{end}}{{range .XTestImports}} {{.}}{{end}}' ./... | grep 'craggy-io/script-services' | cut -d: -f1
 # 4. from a domain module's root: prints only paths of *cap adapter packages
-go list -f '{{.ImportPath}}:{{range .Imports}} {{.}}{{end}}' ./... | grep 'craggy-io/capability-services' | cut -d: -f1
+go list -f '{{.ImportPath}}:{{range .Imports}} {{.}}{{end}}{{range .TestImports}} {{.}}{{end}}{{range .XTestImports}} {{.}}{{end}}' ./... | grep 'craggy-io/capability-services' | cut -d: -f1
 ```
 
 ```powershell
@@ -87,10 +90,10 @@ go list -f '{{range .Imports}}{{println .}}{{end}}' ./registry | Select-String '
 go list -f '{{range .Imports}}{{println .}}{{end}}' ./registry | Select-String 'craggy-io/capability-services'
 # 2.
 foreach ($p in 'jobs','tools','mcp','httpapi','starlarkcap') { "${p}: " + ((go list -f '{{range .Imports}}{{println .}}{{end}}' "./$p" | Select-String 'craggy-io/capability-services/' | ForEach-Object { ($_ -split '/')[-1] }) -join ' ') }
-# 3.
-go list -f '{{.ImportPath}}:{{range .Imports}} {{.}}{{end}}' ./... | Select-String 'craggy-io/script-services' | ForEach-Object { ($_ -split ':')[0] }
-# 4. (domain module root)
-go list -f '{{.ImportPath}}:{{range .Imports}} {{.}}{{end}}' ./... | Select-String 'craggy-io/capability-services' | ForEach-Object { ($_ -split ':')[0] }
+# 3. (test imports included)
+go list -f '{{.ImportPath}}:{{range .Imports}} {{.}}{{end}}{{range .TestImports}} {{.}}{{end}}{{range .XTestImports}} {{.}}{{end}}' ./... | Select-String 'craggy-io/script-services' | ForEach-Object { ($_ -split ':')[0] }
+# 4. (domain module root, test imports included)
+go list -f '{{.ImportPath}}:{{range .Imports}} {{.}}{{end}}{{range .TestImports}} {{.}}{{end}}{{range .XTestImports}} {{.}}{{end}}' ./... | Select-String 'craggy-io/capability-services' | ForEach-Object { ($_ -split ':')[0] }
 ```
 
 ## Construct and close
@@ -211,9 +214,11 @@ See [jobs](docs/jobs.md).
 - Every capability a file defines must be named under its prefix (else
   `invalid`). It may supersede refs under the prefix freely and refs outside it
   only when `LoadOptions.MaySupersede` admits them (else `denied`). The filter sees
-  the registered target capability when there is one, so tag policies work
+  the registered target capability, so tag policies work
   (`registry.Not(registry.Tagged("admin"))`); a bare ref supersedes every version,
-  so every registered version must pass. `nil` admits nothing outside the prefix.
+  so every registered version must pass. A ref outside the prefix naming nothing
+  registered is denied outright (register the target first), and the policy is
+  re-checked at install time. `nil` admits nothing outside the prefix.
   Choose the narrowest policy that serves the deployment.
 - Script capabilities go through the same view filters as Go ones and call other
   capabilities through the caller's view; a script never widens its caller's

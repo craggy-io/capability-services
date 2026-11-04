@@ -20,8 +20,12 @@ type View struct {
 // Registry returns the underlying registry.
 func (v *View) Registry() *Registry { return v.reg }
 
-// Allows reports whether c is in this view.
-func (v *View) Allows(c Capability) bool { return v.filter == nil || v.filter(c) }
+// Allows reports whether c is in this view. The filter receives a clone:
+// filters are host code run against snapshot capabilities, and mutating
+// what they are handed must not rewrite the snapshot (or race readers).
+func (v *View) Allows(c Capability) bool {
+	return v.filter == nil || v.filter(cloneCapability(c))
+}
 
 // Intersect returns a view admitting only what both views admit. The views
 // must belong to the same registry; otherwise it returns v unchanged.
@@ -35,7 +39,7 @@ func (v *View) Intersect(other *View) *View {
 func (v *View) entry(s *snapshot, k capKey, rc resolvedCap) Entry {
 	ready, errMsg := v.reg.readyOf(k, rc.capab.Check != nil)
 	return Entry{
-		Capability:   rc.capab,
+		Capability:   cloneCapability(rc.capab),
 		Current:      s.current[k.name] == k.version,
 		SupersededBy: append([]string(nil), s.supBy[k]...),
 		Group:        s.groupOf(k.name),
@@ -248,15 +252,53 @@ func (r *Registry) purgeJobs() {
 	}
 	cutoff := time.Now().Add(-r.cfg.keepJobs)
 	r.jobsMu.Lock()
-	defer r.jobsMu.Unlock()
+	purged := false
 	for id, j := range r.jobs {
 		j.mu.Lock()
 		expired := j.state.Terminal() && !j.ended.IsZero() && j.ended.Before(cutoff)
 		j.mu.Unlock()
 		if expired {
 			delete(r.jobs, id)
+			purged = true
 		}
 	}
+	// Compact the journal too, or it would grow for the whole process
+	// lifetime and resurrect every expired job at the next restart.
+	if !purged || r.jobJournalPath == "" {
+		r.jobsMu.Unlock()
+		return
+	}
+	records := r.jobRecordsLocked()
+	seqs := make(map[string]int64, len(records))
+	for _, rec := range records {
+		seqs[rec.Status.ID] = rec.Status.Seq
+	}
+	// Rewrite only if no job appended a newer record after the snapshot:
+	// with jobJournalMu held, later persists append after the rewrite; a
+	// job mid-emit (its seq moved, or its lock busy inside persist) makes
+	// us skip this round instead of clobbering its record — or deadlocking
+	// against persistJob's job.mu -> jobJournalMu order.
+	r.jobJournalMu.Lock()
+	stale := false
+	for id, j := range r.jobs {
+		if !j.mu.TryLock() {
+			stale = true
+			break
+		}
+		seq := j.seq
+		j.mu.Unlock()
+		if seq != seqs[id] {
+			stale = true
+			break
+		}
+	}
+	if !stale {
+		if err := writeJobJournalFile(r.jobJournalPath, records); err != nil && r.jobJournalErr == nil {
+			r.jobJournalErr = err
+		}
+	}
+	r.jobJournalMu.Unlock()
+	r.jobsMu.Unlock()
 }
 
 // --- Registry acting as View(All) ---

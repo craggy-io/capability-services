@@ -685,8 +685,10 @@ func Handler(v *registry.View, opts ...Option) http.Handler
   cancelled 499, unavailable 503, anything else 500.
 - **Caller.** Authentication is not part of this package. The host wraps the
   handler and puts a `Caller` in the request context, or supplies the `Caller`
-  option. `Session` comes from a `Craggy-Session` header when the client sends one
-  (section 5).
+  option. `Session` comes from a `Craggy-Session` header only when that caller
+  has none — the header never overrides the host's authenticated session
+  (section 5). A request with no identity is an anonymous caller, and the
+  job-access rule applies to it like any other.
 
 ### In-process tool-calling loops: `tools`
 

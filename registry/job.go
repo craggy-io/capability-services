@@ -113,9 +113,10 @@ type Job struct {
 	caller Caller
 	parent string // parent job id, "" for a top-level call
 
-	cancel    context.CancelFunc
-	cancelReq atomic.Bool
-	done      chan struct{}
+	cancel      context.CancelFunc
+	cancelReq   atomic.Bool
+	cancelFired bool // under mu: Cancel fired while non-terminal
+	done        chan struct{}
 
 	mu        sync.Mutex
 	state     JobState // stored state; stalled is derived in Status
@@ -148,15 +149,53 @@ func (j *Job) Status() JobStatus {
 	return j.statusLocked(time.Now())
 }
 
+func cloneErrorInfo(e *ErrorInfo) *ErrorInfo {
+	if e == nil {
+		return nil
+	}
+	cp := *e
+	return &cp
+}
+
+// cloneUpdate copies u, detaching Data (stored in its JSON-decoded form
+// by reportProgress) from the job's value.
+func cloneUpdate(u Update) Update {
+	if u.Data != nil {
+		if cp, err := jsonRoundTrip(u.Data); err == nil {
+			u.Data = cp
+		}
+	}
+	return u
+}
+
+// jsonRoundTrip deep-copies a JSON-shaped value through encoding/json,
+// returning its decoded form (maps, slices, strings, float64s, bools).
+func jsonRoundTrip(v any) (any, error) {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	var out any
+	if string(raw) == "null" {
+		return nil, nil
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (j *Job) statusLocked(now time.Time) JobStatus {
 	st := j.state
 	if st == JobRunning && j.hbDur > 0 && now.Sub(j.heartbeat) > j.hbDur {
 		st = JobStalled
 	}
+	// Everything mutable is cloned: a JobStatus is a snapshot consumers
+	// may hold and mutate, never a handle into the live job.
 	return JobStatus{
-		ID: j.id, Capability: j.capab.Ref(), Caller: j.caller, Parent: j.parent, State: st,
-		Last: j.last, Seq: j.seq, SupersededBy: append([]string(nil), j.supBy...),
-		Started: j.started, Heartbeat: j.heartbeat, Ended: j.ended, Error: j.errInfo,
+		ID: j.id, Capability: j.capab.Ref(), Caller: cloneCaller(j.caller), Parent: j.parent, State: st,
+		Last: cloneUpdate(j.last), Seq: j.seq, SupersededBy: append([]string(nil), j.supBy...),
+		Started: j.started, Heartbeat: j.heartbeat, Ended: j.ended, Error: cloneErrorInfo(j.errInfo),
 	}
 }
 
@@ -176,7 +215,13 @@ func (j *Job) Wait(ctx context.Context) (json.RawMessage, error) {
 	select {
 	case <-j.done:
 	case <-ctx.Done():
-		return nil, WrapCode(Cancelled, ctx.Err())
+		// The job may have gone terminal at the same moment ctx ended;
+		// the real outcome wins over the wait's cancellation.
+		select {
+		case <-j.done:
+		default:
+			return nil, WrapCode(Cancelled, ctx.Err())
+		}
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
@@ -206,10 +251,22 @@ func infoMessage(i *ErrorInfo, fallback string) string {
 
 // Cancel requests cancellation: the handler's context is cancelled. If the
 // handler later returns success anyway, the job still ends cancelled —
-// cancellation cannot be converted to success.
+// cancellation cannot be converted to success. Cancelling a job that
+// already reached a terminal state is a no-op: in particular it does not
+// fire the context children are tied to, so a parent that finished
+// normally leaves its children running however often it is cancelled.
 func (j *Job) Cancel() {
-	if j.cancelReq.CompareAndSwap(false, true) && j.cancel != nil {
-		j.cancel()
+	j.mu.Lock()
+	if j.state.Terminal() || j.cancelFired {
+		j.mu.Unlock()
+		return
+	}
+	j.cancelFired = true
+	j.cancelReq.Store(true)
+	cancel := j.cancel
+	j.mu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
 }
 
@@ -220,7 +277,10 @@ func (j *Job) Events(ctx context.Context) <-chan Event {
 	out := make(chan Event, 16)
 	ch := make(chan Event, 64)
 	j.mu.Lock()
-	hist := append([]Event(nil), j.history...)
+	hist := make([]Event, len(j.history))
+	for i, ev := range j.history {
+		hist[i] = cloneEvent(ev)
+	}
 	terminal := j.state.Terminal()
 	if !terminal {
 		if j.subs == nil {
@@ -268,6 +328,21 @@ func (j *Job) Events(ctx context.Context) <-chan Event {
 	return out
 }
 
+// cloneEvent detaches an event's pointers from the job, for replay.
+func cloneEvent(ev Event) Event {
+	ev.Error = cloneErrorInfo(ev.Error)
+	if ev.Update != nil {
+		u := cloneUpdate(*ev.Update)
+		ev.Update = &u
+	}
+	return ev
+}
+
+// maxHistory bounds replay history. Consecutive same-stage progress
+// already coalesces, but a handler alternating stages (or inventing new
+// ones) would otherwise grow history — and replay — without bound.
+const maxHistory = 1024
+
 func (j *Job) emitLocked(ev Event) {
 	j.seq++
 	ev.Seq = j.seq
@@ -280,7 +355,20 @@ func (j *Job) emitLocked(ev Event) {
 		j.history[n-1] = ev
 	} else {
 		j.history = append(j.history, ev)
+		for len(j.history) > maxHistory {
+			// Drop the oldest progress event (never the initial one):
+			// state changes and the terminal event stay replayable.
+			drop := 1
+			for i := 1; i < len(j.history); i++ {
+				if j.history[i].Update != nil {
+					drop = i
+					break
+				}
+			}
+			j.history = append(j.history[:drop], j.history[drop+1:]...)
+		}
 	}
+	ev = cloneEvent(ev) // subscribers get copies, not handles into the job
 	for ch := range j.subs {
 		select {
 		case ch <- ev:
@@ -295,7 +383,14 @@ func (j *Job) emitLocked(ev Event) {
 }
 
 func (j *Job) recordLocked() jobRecord {
-	return jobRecord{Status: j.statusLocked(time.Now()), Result: append(json.RawMessage(nil), j.result...)}
+	return jobRecord{
+		Status: j.statusLocked(time.Now()), Result: append(json.RawMessage(nil), j.result...),
+		Title: j.capab.Title, Description: j.capab.Description,
+		Tags: append([]string(nil), j.capab.Tags...), Effects: j.capab.Effects,
+		Supersedes: append([]string(nil), j.capab.Supersedes...),
+		Accepts:    append([]Subject(nil), j.capab.Accepts...), Emits: append([]Subject(nil), j.capab.Emits...),
+		Long: j.capab.Long, HeartbeatMs: j.capab.Heartbeat.Milliseconds(), Origin: j.capab.Origin,
+	}
 }
 
 // sameStageProgress reports whether next only supersedes prev: both are
@@ -308,6 +403,17 @@ func sameStageProgress(prev, next Event) bool {
 func (j *Job) reportProgress(u Update) {
 	if !validUpdate(u) {
 		return
+	}
+	if u.Data != nil {
+		// Store Data in its JSON-decoded form: it validates the value (a
+		// NaN or a channel would break every later status/journal
+		// marshal) and detaches it from a map the caller may reuse and
+		// mutate.
+		cp, err := jsonRoundTrip(u.Data)
+		if err != nil {
+			return // unmarshalable detail: drop the update, like bad counters
+		}
+		u.Data = cp
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
@@ -348,11 +454,15 @@ func (j *Job) finish(result json.RawMessage, err error) {
 	switch {
 	case j.cancelReq.Load():
 		j.state = JobCancelled
-		msg := "job cancelled"
 		if err != nil {
-			msg = err.Error()
+			// Keep the handler error's reason and clean message; only
+			// the code is forced to cancelled.
+			j.errInfo = Info(err)
+			j.errInfo.Code = Cancelled
+			j.errInfo.Retryable = Cancelled.Retryable()
+		} else {
+			j.errInfo = &ErrorInfo{Code: Cancelled, Message: "job cancelled"}
 		}
-		j.errInfo = &ErrorInfo{Code: Cancelled, Message: msg}
 		j.result = nil
 	case err != nil:
 		if CodeOf(err) == Cancelled {

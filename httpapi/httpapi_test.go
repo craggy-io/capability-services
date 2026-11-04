@@ -60,6 +60,21 @@ func setup(t *testing.T) (*registry.Registry, *httptest.Server) {
 	return r, srv
 }
 
+// getH is http.Get with headers (a session, usually): job endpoints
+// enforce the job-access rule, so a job's owner must present its session.
+func getH(t *testing.T, url string, headers map[string]string) *http.Response {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodGet, url, nil)
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
 func post(t *testing.T, url, body string, headers map[string]string) (*http.Response, []byte) {
 	t.Helper()
 	req, _ := http.NewRequest(http.MethodPost, url, strings.NewReader(body))
@@ -105,7 +120,8 @@ func TestInvokeAndErrorMapping(t *testing.T) {
 
 func TestLongJobFlowAndSSE(t *testing.T) {
 	_, srv := setup(t)
-	resp, b := post(t, srv.URL+"/v1/apk/decompile", `{"id":"app.apk"}`, nil)
+	sess := map[string]string{"Craggy-Session": "flow"}
+	resp, b := post(t, srv.URL+"/v1/apk/decompile", `{"id":"app.apk"}`, sess)
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("long POST = %d %s", resp.StatusCode, b)
 	}
@@ -121,10 +137,7 @@ func TestLongJobFlowAndSSE(t *testing.T) {
 		t.Fatalf("202 body=%s err=%v", b, err)
 	}
 	// SSE replay+live until terminal.
-	resp2, err := http.Get(srv.URL + loc + "/events")
-	if err != nil {
-		t.Fatal(err)
-	}
+	resp2 := getH(t, srv.URL+loc+"/events", sess)
 	sse, _ := io.ReadAll(resp2.Body)
 	resp2.Body.Close()
 	s := string(sse)
@@ -138,10 +151,7 @@ func TestLongJobFlowAndSSE(t *testing.T) {
 	if strings.Index(s, `"stage":"push"`) > strings.Index(s, "event: succeeded") {
 		t.Fatal("SSE terminal came before later stages")
 	}
-	resp3, err := http.Get(srv.URL + loc)
-	if err != nil {
-		t.Fatal(err)
-	}
+	resp3 := getH(t, srv.URL+loc, sess)
 	gb, _ := io.ReadAll(resp3.Body)
 	resp3.Body.Close()
 	if !strings.Contains(string(gb), `"state":"succeeded"`) || !strings.Contains(string(gb), `"result"`) {
@@ -153,9 +163,10 @@ func TestLongJobFlowAndSSE(t *testing.T) {
 		t.Fatalf("prefer wait = %d %s", resp.StatusCode, b)
 	}
 	// DELETE cancels a fresh job.
-	resp, b = post(t, srv.URL+"/v1/apk/decompile", `{"id":"c.apk"}`, nil)
+	resp, b = post(t, srv.URL+"/v1/apk/decompile", `{"id":"c.apk"}`, sess)
 	loc = resp.Header.Get("Location")
 	req, _ := http.NewRequest(http.MethodDelete, srv.URL+loc, nil)
+	req.Header.Set("Craggy-Session", "flow")
 	dresp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -166,7 +177,7 @@ func TestLongJobFlowAndSSE(t *testing.T) {
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		gr, _ := http.Get(srv.URL + loc)
+		gr := getH(t, srv.URL+loc, sess)
 		bb, _ := io.ReadAll(gr.Body)
 		gr.Body.Close()
 		if strings.Contains(string(bb), `"state":"cancelled"`) {
@@ -348,17 +359,15 @@ func TestErrorEnvelopeCarriesReason(t *testing.T) {
 		t.Fatalf("long waited error = %d %s", resp.StatusCode, b)
 	}
 	// Job status for a failed Long call carries the reason too.
-	resp, b = post(t, srv.URL+"/v1/pool/long", `{"id":"x"}`, nil)
+	sess := map[string]string{"Craggy-Session": "pool"}
+	resp, b = post(t, srv.URL+"/v1/pool/long", `{"id":"x"}`, sess)
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("long POST = %d %s", resp.StatusCode, b)
 	}
 	loc := resp.Header.Get("Location")
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		gr, err := http.Get(srv.URL + loc)
-		if err != nil {
-			t.Fatal(err)
-		}
+		gr := getH(t, srv.URL+loc, sess)
 		gb, _ := io.ReadAll(gr.Body)
 		gr.Body.Close()
 		if strings.Contains(string(gb), `"state":"failed"`) {

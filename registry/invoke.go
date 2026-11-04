@@ -1,8 +1,10 @@
 package registry
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"slices"
 	"sort"
 	"time"
 )
@@ -21,12 +23,18 @@ func (v *View) effective(ctx context.Context) *View {
 
 func normalizeInput(rc resolvedCap, in json.RawMessage) (json.RawMessage, error) {
 	if rc.capab.Input == nil {
-		// No input: accept empty, null or {} only.
-		s := string(in)
-		if s == "" || s == "null" || s == "{}" {
+		// No input: accept an empty body, null or {} — semantically, so
+		// whitespace a client added is fine.
+		switch s := string(bytes.TrimSpace(in)); s {
+		case "", "null":
 			return json.RawMessage("{}"), nil
+		default:
+			var obj map[string]json.RawMessage
+			if json.Unmarshal(in, &obj) == nil && len(obj) == 0 {
+				return json.RawMessage("{}"), nil
+			}
+			return nil, Errorf(Invalid, "%s takes no input", rc.capab.Ref())
 		}
-		return nil, Errorf(Invalid, "%s takes no input", rc.capab.Ref())
 	}
 	if len(in) == 0 {
 		in = json.RawMessage("{}")
@@ -37,7 +45,9 @@ func normalizeInput(rc resolvedCap, in json.RawMessage) (json.RawMessage, error)
 	if err := validateAgainst(rc.inRes, in); err != nil {
 		return nil, &Error{Code: Invalid, Message: invalidInputMessage(rc.capab, in, err), Err: err}
 	}
-	return in, nil
+	// The runner reads the input later, on its own goroutine: it must own
+	// the bytes, not alias a buffer the caller may reuse or mutate.
+	return append(json.RawMessage(nil), in...), nil
 }
 
 func unwrapMessage(err error) string {
@@ -92,9 +102,37 @@ func encodeResult(rc resolvedCap, out any, validate bool) (json.RawMessage, erro
 // JobStatus.Parent names the parent, and cancelling the parent cancels the
 // child (and so on down). A parent that finishes normally leaves its
 // children running.
+// buildChain wraps handler with the middleware (first Use'd outermost).
+// Middleware constructors are host code run synchronously in Start, so a
+// panic here is recovered as an internal error — the same treatment a
+// panicking handler gets — instead of crashing Start's caller.
+func buildChain(mw []Middleware, c Capability, handler Handler) (h Handler, err error) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			h, err = nil, Errorf(Internal, "%s: middleware panicked: %v", c.Ref(), rec)
+		}
+	}()
+	c = cloneCapability(c) // middleware inspects a copy, never the snapshot
+	for i := len(mw) - 1; i >= 0; i-- {
+		if mw[i] != nil {
+			handler = mw[i](handler, c)
+		}
+	}
+	return handler, nil
+}
+
 func (v *View) Start(ctx context.Context, ref string, in json.RawMessage) (*Job, error) {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	// Closed first: after Close every Start fails unavailable/closed,
+	// whatever the ref or input would otherwise have failed with. The
+	// check repeats under jobsMu below for the Close race.
+	v.reg.jobsMu.RLock()
+	closed := v.reg.closed
+	v.reg.jobsMu.RUnlock()
+	if closed {
+		return nil, ReasonErrorf(Unavailable, ReasonClosed, "%s: the registry is closed", ref)
 	}
 	ev := v.effective(ctx)
 	k, rc, s, ok := ev.resolve(ref)
@@ -118,6 +156,7 @@ func (v *View) Start(ctx context.Context, ref string, in json.RawMessage) (*Job,
 	_ = s
 
 	caller, _ := CallerFrom(ctx)
+	caller = cloneCaller(caller) // own it: detach from the caller's maps/chain (and break any cycle)
 	hb := rc.capab.Heartbeat
 	if hb <= 0 {
 		hb = 30 * time.Second
@@ -140,10 +179,10 @@ func (v *View) Start(ctx context.Context, ref string, in json.RawMessage) (*Job,
 	// The handler's view is the effective (clamped) view.
 	jctx = WithView(jctx, ev)
 
-	handler := rc.capab.Handler
-	// First Use'd middleware is outermost.
-	for i := len(v.reg.cfg.middleware) - 1; i >= 0; i-- {
-		handler = v.reg.cfg.middleware[i](handler, rc.capab)
+	handler, err := buildChain(v.reg.cfg.middleware, rc.capab, rc.capab.Handler)
+	if err != nil {
+		cancel()
+		return nil, err
 	}
 
 	// Insert the job and count its runner in one step under jobsMu, the
@@ -196,6 +235,7 @@ func (r *Registry) runJob(ctx context.Context, job *Job, rc resolvedCap, handler
 		}
 	}
 	sort.Strings(tags)
+	tags = slices.Compact(tags) // belt and braces: never acquire one semaphore twice
 	acquired := make([]chan struct{}, 0, len(tags))
 	release := func() {
 		for _, sem := range acquired {

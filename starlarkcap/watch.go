@@ -284,6 +284,9 @@ func (w *Watcher) scan() {
 		if present[prefix] {
 			continue
 		}
+		if w.ctx.Err() != nil {
+			return // Close from an unload's OnResult stops the rest too
+		}
 		delete(w.files, prefix)
 		if st.rejected {
 			continue

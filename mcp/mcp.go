@@ -46,6 +46,7 @@ type server struct {
 	sdk *mcpsdk.Server
 	v   *registry.View
 	cfg config
+	ctx context.Context // Serve's lifetime; cancelled by stop()
 
 	mu       sync.Mutex
 	served   map[string]string // tool name -> fingerprint of what was added
@@ -60,13 +61,13 @@ func Serve(s *mcpsdk.Server, v *registry.View, opts ...Option) (stop func()) {
 	for _, o := range opts {
 		o(&cfg)
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	sv := &server{
-		sdk: s, v: v, cfg: cfg,
+		sdk: s, v: v, cfg: cfg, ctx: ctx,
 		served: map[string]string{}, callers: map[*mcpsdk.ServerSession]registry.Caller{},
 		watching: map[*mcpsdk.ServerSession]bool{},
 	}
 	sv.sync()
-	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -120,10 +121,10 @@ func (sv *server) sync() {
 	for name, d := range want {
 		fp := fingerprint(d)
 		if sv.served[name] != fp {
-			// New or changed: remove first so re-Add can't collide.
-			if _, existed := sv.served[name]; existed {
-				remove = append(remove, name)
-			}
+			// New or changed. The SDK's AddTool replaces a tool of the
+			// same name atomically, so a changed tool is never removed
+			// first (that would open a window where calls to it fail
+			// with a protocol error instead of a tool result).
 			sv.served[name] = fp
 			add = append(add, d)
 		}
@@ -133,8 +134,23 @@ func (sv *server) sync() {
 		sv.sdk.RemoveTools(remove...)
 	}
 	for _, d := range add {
-		sv.sdk.AddTool(sv.toolFor(d), sv.handlerFor(d))
+		sv.addTool(d)
 	}
+}
+
+// addTool registers one tool, recovering from SDK validation panics: sync
+// runs on the Watch goroutine after Serve returned, where a panic would
+// crash the host process. A tool the SDK rejects is dropped (and retried
+// on the next sync) instead.
+func (sv *server) addTool(d tools.Def) {
+	defer func() {
+		if recover() != nil {
+			sv.mu.Lock()
+			delete(sv.served, d.Name)
+			sv.mu.Unlock()
+		}
+	}()
+	sv.sdk.AddTool(sv.toolFor(d), sv.handlerFor(d))
 }
 
 func (sv *server) toolFor(d tools.Def) *mcpsdk.Tool {
@@ -163,7 +179,10 @@ func (sv *server) toolFor(d tools.Def) *mcpsdk.Tool {
 }
 
 // sessionCaller builds (once) and returns the Caller for a session, and
-// arms the OnClose watcher the first time the session is seen.
+// arms the OnClose watcher the first time the session is seen. The host's
+// Caller callback runs outside sv.mu: it may do session-store lookups, and
+// holding the lock across it would stall tool sync and stop() (and
+// deadlock if the callback itself calls stop()).
 func (sv *server) sessionCaller(ss *mcpsdk.ServerSession) registry.Caller {
 	if ss == nil {
 		return registry.Caller{Kind: "agent"}
@@ -173,6 +192,8 @@ func (sv *server) sessionCaller(ss *mcpsdk.ServerSession) registry.Caller {
 		sv.mu.Unlock()
 		return c
 	}
+	sv.mu.Unlock()
+
 	var c registry.Caller
 	if sv.cfg.caller != nil {
 		c = sv.cfg.caller(ss)
@@ -190,6 +211,12 @@ func (sv *server) sessionCaller(ss *mcpsdk.ServerSession) registry.Caller {
 	}
 	if c.ID == "" {
 		c.ID = "agent:" + c.Session
+	}
+
+	sv.mu.Lock()
+	if existing, ok := sv.callers[ss]; ok {
+		sv.mu.Unlock()
+		return existing // a concurrent first call won; one Caller per session
 	}
 	sv.callers[ss] = c
 	armWatch := !sv.watching[ss] // always: forgetting the caller must not depend on OnClose
@@ -271,6 +298,21 @@ func progressMessage(u registry.Update) string {
 // send the client one notification per file.
 const progressInterval = 250 * time.Millisecond
 
+// forwardLong forwards a Long job's progress after its handle has been
+// returned. The forwarding context outlives the request but ends with the
+// session or with Serve's stop(): a forwarder bound only to the job would
+// tick forever against a dead session if the job never terminated.
+func (sv *server) forwardLong(reqCtx context.Context, ss *mcpsdk.ServerSession, token any, job *registry.Job) {
+	ctx, cancel := context.WithCancel(context.WithoutCancel(reqCtx))
+	defer cancel()
+	defer context.AfterFunc(sv.ctx, cancel)()
+	go func() {
+		_ = ss.Wait()
+		cancel()
+	}()
+	forwardProgress(ctx, ss, token, job)
+}
+
 // forwardProgress streams a job's updates as notifications/progress until
 // the job is terminal. Progress values are 1,2,3,... (monotonic, no total).
 // A new stage is sent at once. Repeats within a stage are paced to
@@ -310,6 +352,8 @@ func forwardProgress(ctx context.Context, ss *mcpsdk.ServerSession, token any, j
 	events := job.Events(ctx)
 	for {
 		select {
+		case <-ctx.Done():
+			return
 		case ev, ok := <-events:
 			if !ok {
 				latest()
@@ -352,16 +396,16 @@ func (sv *server) call(ctx context.Context, req *mcpsdk.CallToolRequest) tools.R
 	if !ok || token == nil && !entry.Long {
 		return tools.Do(ctx, sv.v, req.Params.Name, args)
 	}
-	job, err := sv.v.Start(ctx, entry.Name, args)
+	job, err := sv.v.Start(ctx, entry.Ref(), args) // pinned: the entry just resolved
 	if err != nil {
 		return tools.ErrorResult(err)
 	}
 	if entry.Long {
 		// Return the job handle now; the agent follows up with
 		// jobs_wait. Progress forwarding continues in the background
-		// while the session lives.
+		// while the session lives — and no longer than that.
 		if token != nil {
-			go forwardProgress(context.WithoutCancel(ctx), req.Session, token, job)
+			go sv.forwardLong(ctx, req.Session, token, job)
 		}
 		return tools.Handle(entry, job)
 	}

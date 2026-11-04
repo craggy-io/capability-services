@@ -187,15 +187,9 @@ Requires Go 1.27 or newer. Dependencies: `github.com/google/jsonschema-go`,
 `github.com/craggy-io/script-services`.
 
 **Depends on a published script-services.** [go.mod](go.mod) requires
-`github.com/craggy-io/script-services` like any other dependency. Until that
-module has a tagged release, the requirement is the placeholder
-`v0.0.0-00010101000000-000000000000` and this module does not build. Once
-`script-services` is tagged, update it:
-
-```sh
-go get github.com/craggy-io/script-services@<tag>
-go mod tidy
-```
+`github.com/craggy-io/script-services` like any other dependency, at its
+first tagged release (`v0.1.0`). Both modules are private: consumers need
+authenticated Git access and `GOPRIVATE` covering `github.com/craggy-io/*`.
 
 ```sh
 go test ./...

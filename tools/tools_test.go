@@ -200,7 +200,15 @@ func TestDoStructuredOutput(t *testing.T) {
 	}
 
 	e, _ := agents.Get("storage.artifact.get")
-	for name, out := range map[string]string{"array": `[1]`, "string": `"x"`, "empty": ``, "torn": `{"a":`} {
+	// Any valid JSON is structured content when an output schema is
+	// advertised — a tool whose outputSchema is a string or array must
+	// still return structuredContent (docs/projections.md).
+	for name, out := range map[string]string{"array": `[1]`, "string": `"x"`} {
+		if got := tools.StructuredOutput(e, []byte(out)); string(got) != out {
+			t.Errorf("%s output %q not structured: %s", name, out, got)
+		}
+	}
+	for name, out := range map[string]string{"empty": ``, "torn": `{"a":`} {
 		if got := tools.StructuredOutput(e, []byte(out)); got != nil {
 			t.Errorf("%s output %q was structured: %s", name, out, got)
 		}

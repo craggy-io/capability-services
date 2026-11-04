@@ -132,8 +132,13 @@ func Info(title, version string) Option // OpenAPI info; default "capability-ser
   naming its superseders.
 - Caller: a `Caller` already in the request context (put there by the host's auth
   wrapper with `registry.WithCaller`) wins; otherwise the `Caller` option derives
-  one. A `Craggy-Session` header sets `Caller.Session` either way.
-- Job routes apply the job-access rule for that caller (`View.JobFor`).
+  one. A `Craggy-Session` header sets `Caller.Session` only when that caller has
+  none — it never overrides the host's authenticated session. A request with no
+  identity at all is an anonymous caller (`Kind: "http"`), never the
+  trusted-local no-caller path.
+- Job routes apply the job-access rule for that caller (`View.JobFor`), for
+  anonymous requests too: a headerless caller sees no jobs under the default
+  rule. Hosts that want open job access install `registry.WithJobAccess`.
 - The handler serves paths with or without the `/v1` prefix, so it also works
   under `http.StripPrefix("/v1", ...)`.
 

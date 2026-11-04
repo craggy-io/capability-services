@@ -84,7 +84,10 @@ func ValidateOutput(on bool) Option {
 	return Option{regFn: func(c *config) { c.validateOutput = on }}
 }
 
-// CheckTimeout bounds a single readiness Check call (default 10s).
+// CheckTimeout bounds a single readiness Check call (default 10s). A
+// Check that ignores its context past the bound counts as failed; its
+// goroutine is abandoned (Go cannot kill it), so checks should still
+// honour their context.
 func CheckTimeout(d time.Duration) Option {
 	return Option{regFn: func(c *config) {
 		if d > 0 {

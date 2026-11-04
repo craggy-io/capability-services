@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"sort"
 	"strings"
 	"time"
 
@@ -27,11 +28,11 @@ type Def struct {
 	Entry registry.Entry
 }
 
-// Defs returns one Def per ready entry in v.List(), sorted by name. Agents
-// only ever see current, non-superseded, ready capabilities. Re-list every
-// turn: runtime changes show up immediately.
+// Defs returns one Def per ready entry in v.List(), sorted by tool name.
+// Agents only ever see current, non-superseded, ready capabilities. Re-list
+// every turn: runtime changes show up immediately.
 func Defs(v *registry.View) []Def {
-	entries := v.List() // already sorted by name
+	entries := v.List()
 	out := make([]Def, 0, len(entries))
 	for _, e := range entries {
 		if !e.Ready {
@@ -44,6 +45,9 @@ func Defs(v *registry.View) []Def {
 			Entry:       e,
 		})
 	}
+	// Tool-name order, not capability-name order: mapping '.' (0x2E) to
+	// '_' (0x5F) reorders names ("a.z" before "a1.x", but a1_x < a_z).
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
 
@@ -63,11 +67,28 @@ func describe(e registry.Entry) string {
 	return strings.Join(parts, "\n\n")
 }
 
+// inputSchema is the tool-facing input schema: always an object schema.
+// Tool protocols (MCP above all) take arguments as a JSON object, and the
+// MCP SDK panics on any other shape — but the registry accepts
+// capabilities whose input schema is not an object (a RawMessage Func's
+// typeless schema, a scalar Func's string schema). An object-flavoured
+// schema keeps its properties with the type made explicit; anything else
+// degrades to a permissive object schema, and registry input validation
+// still rejects arguments the capability itself would not accept.
 func inputSchema(e registry.Entry) *jsonschema.Schema {
 	if e.Input == nil {
 		return registry.EmptyObjectSchema()
 	}
-	return e.Input.CloneSchemas()
+	s := e.Input.CloneSchemas()
+	switch {
+	case s.Type == "object":
+		return s
+	case s.Type == "" && (len(s.Properties) > 0 || len(s.Required) > 0 || s.AdditionalProperties != nil):
+		s.Type = "object"
+		return s
+	default:
+		return &jsonschema.Schema{Type: "object"}
+	}
 }
 
 // JobEnvelope is the text payload returned for a Long capability: its job
@@ -171,14 +192,16 @@ func Handle(e registry.Entry, job *registry.Job) Result {
 }
 
 // StructuredOutput is a capability's output as structured content: out
-// itself when the capability declares an output schema, runs to completion
-// in the call (a Long capability returns a job handle, not its output) and
-// the output is a JSON object. It is nil otherwise.
+// itself when the capability declares an output schema and runs to
+// completion in the call (a Long capability returns a job handle, not its
+// output). Any JSON value counts, not only objects: a tool that
+// advertises e.g. a string outputSchema must still return
+// structuredContent, or strict clients reject the result. Nil otherwise.
 func StructuredOutput(e registry.Entry, out []byte) json.RawMessage {
 	if e.Output == nil || e.Long {
 		return nil
 	}
-	if trimmed := bytes.TrimSpace(out); len(trimmed) > 0 && trimmed[0] == '{' && json.Valid(trimmed) {
+	if trimmed := bytes.TrimSpace(out); len(trimmed) > 0 && json.Valid(trimmed) {
 		return json.RawMessage(trimmed)
 	}
 	return nil
@@ -210,14 +233,17 @@ func Do(ctx context.Context, v *registry.View, tool string, input json.RawMessag
 	if len(input) == 0 {
 		input = json.RawMessage("{}")
 	}
+	// Act on the entry just resolved, pinned by ref: re-resolving the
+	// bare name could land on a concurrently Replaced version whose
+	// Long/output facts differ from the ones this Result is built from.
 	if entry.Long {
-		job, err := v.Start(ctx, name, input)
+		job, err := v.Start(ctx, entry.Ref(), input)
 		if err != nil {
 			return ErrorResult(err)
 		}
 		return Handle(entry, job)
 	}
-	out, err := v.Invoke(ctx, name, input)
+	out, err := v.Invoke(ctx, entry.Ref(), input)
 	return Outcome(entry, out, err)
 }
 

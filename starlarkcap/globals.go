@@ -49,6 +49,12 @@ import (
 // one the ref names now, and a capability removed since fails with
 // not_found. With no view in ctx, the returned built-ins fail with
 // unavailable.
+//
+// Three names are reserved beside the namespaces: call (the built-in),
+// jobs.start (the built-in wins over a capability named jobs.start), and,
+// in Exec, input. Capabilities under those names are still reachable by
+// ref, e.g. call("jobs.start") or call("input.x"); their namespaces are
+// shadowed.
 func Globals(ctx context.Context) sl.StringDict {
 	return newGlobals(ctx, nil).dict()
 }
@@ -92,25 +98,35 @@ func (g *globals) inSnapshot(ref string) error {
 	return registry.Errorf(registry.NotFound, "capability %q not found", ref)
 }
 
-// capabilityTree nests entries by dotted name: inner nodes are
-// map[string]any, leaves are registry.Entry. Check builds its environment
-// from the same v.List(), so what Check accepts is what a script can call.
-func capabilityTree(entries []registry.Entry) map[string]any {
-	tree := map[string]any{}
+// capNode is one node of the namespace tree. A node may carry an Entry
+// (a capability ends here) and children (capabilities below it) at once:
+// a.b can be callable while a.b.c also exists.
+type capNode struct {
+	entry    *registry.Entry
+	children map[string]*capNode
+}
+
+// capabilityTree nests entries by dotted name. Check builds its
+// environment from the same v.List(), so what Check accepts is what a
+// script can call.
+func capabilityTree(entries []registry.Entry) map[string]*capNode {
+	roots := map[string]*capNode{}
 	for _, e := range entries {
 		parts := strings.Split(e.Name, ".")
-		node := tree
-		for _, p := range parts[:len(parts)-1] {
-			next, ok := node[p].(map[string]any)
-			if !ok {
-				next = map[string]any{}
-				node[p] = next
+		level := roots
+		var node *capNode
+		for _, p := range parts {
+			node = level[p]
+			if node == nil {
+				node = &capNode{children: map[string]*capNode{}}
+				level[p] = node
 			}
-			node = next
+			level = node.children
 		}
-		node[parts[len(parts)-1]] = e
+		entry := e
+		node.entry = &entry
 	}
-	return tree
+	return roots
 }
 
 // dict builds the predeclared names: one namespace per top-level
@@ -139,21 +155,27 @@ func (g *globals) requireView() (*registry.View, error) {
 	return g.view, nil
 }
 
-func (g *globals) buildNode(path string, node any) sl.Value {
-	switch t := node.(type) {
-	case registry.Entry:
-		e := t
-		return sl.NewBuiltin(e.Name, func(thread *sl.Thread, b *sl.Builtin, args sl.Tuple, kwargs []sl.Tuple) (sl.Value, error) {
-			return g.invoke(thread, e.Name, args, kwargs)
-		})
-	case map[string]any:
-		ns := &namespace{name: path, attrs: map[string]sl.Value{}}
-		for k, child := range t {
-			ns.attrs[k] = g.buildNode(path+"."+k, child)
-		}
-		return ns
+func (g *globals) buildNode(path string, node *capNode) sl.Value {
+	call := func(thread *sl.Thread, args sl.Tuple, kwargs []sl.Tuple) (sl.Value, error) {
+		return g.invoke(thread, node.entry.Name, args, kwargs)
 	}
-	return sl.None
+	if len(node.children) == 0 {
+		if node.entry == nil {
+			return sl.None
+		}
+		e := node.entry
+		return sl.NewBuiltin(e.Name, func(thread *sl.Thread, b *sl.Builtin, args sl.Tuple, kwargs []sl.Tuple) (sl.Value, error) {
+			return call(thread, args, kwargs)
+		})
+	}
+	ns := &namespace{name: path, attrs: map[string]sl.Value{}}
+	if node.entry != nil {
+		ns.call = call // callable namespace: a.b() and a.b.c() both work
+	}
+	for k, child := range node.children {
+		ns.attrs[k] = g.buildNode(path+"."+k, child)
+	}
+	return ns
 }
 
 // invoke runs a capability (blocking, even for Long ones) and converts the
@@ -209,6 +231,9 @@ func (g *globals) callBuiltin(thread *sl.Thread, b *sl.Builtin, args sl.Tuple, k
 		return nil, err
 	}
 	if err := g.inSnapshot(ref); err != nil {
+		if g.obs != nil {
+			g.obs.rejected(thread, ref, err)
+		}
 		return nil, err
 	}
 	if g.obs != nil {
@@ -227,11 +252,19 @@ func (g *globals) jobsStart(thread *sl.Thread, b *sl.Builtin, args sl.Tuple, kwa
 		return nil, err
 	}
 	if err := g.inSnapshot(ref); err != nil {
+		if g.obs != nil {
+			g.obs.rejected(thread, ref, err)
+		}
 		return nil, err
 	}
 	val, job, err := startJob(g.ctx, v, ref, kwargs)
-	if job != nil && g.obs != nil {
-		g.obs.track(job)
+	if g.obs != nil {
+		if err != nil {
+			g.obs.rejected(thread, ref, err)
+		} else if job != nil {
+			g.obs.track(job)
+			g.obs.started(thread, job)
+		}
 	}
 	return val, err
 }
@@ -253,7 +286,23 @@ func startJob(ctx context.Context, v *registry.View, ref string, kwargs []sl.Tup
 type namespace struct {
 	name  string
 	attrs map[string]sl.Value
+	// call is set when a capability's name ends exactly at this
+	// namespace (a.b beside a.b.c): the namespace itself is callable.
+	call func(thread *sl.Thread, args sl.Tuple, kwargs []sl.Tuple) (sl.Value, error)
 }
+
+func (n *namespace) Name() string { return n.name }
+
+// CallInternal makes a namespace with an entry callable. A namespace
+// without one keeps Starlark's usual not-callable error text.
+func (n *namespace) CallInternal(thread *sl.Thread, args sl.Tuple, kwargs []sl.Tuple) (sl.Value, error) {
+	if n.call == nil {
+		return nil, fmt.Errorf("invalid call of non-function (namespace)")
+	}
+	return n.call(thread, args, kwargs)
+}
+
+var _ sl.Callable = (*namespace)(nil)
 
 func (n *namespace) String() string        { return "<capabilities " + n.name + ">" }
 func (n *namespace) Type() string          { return "namespace" }

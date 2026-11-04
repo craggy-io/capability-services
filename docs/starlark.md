@@ -120,8 +120,9 @@ module loaded through `p.Modules`, transitively.
 - `Hooks.Print(pos, msg)` receives `print()` output and superseded warnings.
   `Hooks.Call(CallEvent)` reports each capability call twice: started (with its
   job ID) and settled (with `Err` on failure and `Elapsed`); a call the registry
-  rejects before creating a job reports only the settled event. Hooks run on the
-  script's goroutine.
+  rejects before creating a job reports only the settled event, and a
+  `jobs.start` only the started one (its job may outlive the script). Hooks run
+  on the script's goroutine.
 - Every job the script starts is tracked. If the script fails or its context
   ends, those still running are cancelled. A script that finishes cleanly leaves
   jobs it started with `jobs.start` running. When `Exec` itself runs inside a
@@ -213,12 +214,16 @@ loads".
 - **Supersession.** A capability may supersede any ref under its prefix. A ref
   outside the prefix needs `LoadOptions.MaySupersede` to admit it, else the load
   fails with `denied` and installs nothing. The filter is called with the
-  registered capability the ref names, otherwise with a `Capability` carrying only
-  `Name`, so both name and tag policies work: `registry.Match("jadx.*")`,
-  `registry.Not(registry.Tagged("admin"))`. A pinned ref (`x.y@1`) is checked
-  against that version; a bare ref supersedes every version, so every registered
-  version must pass, and one that fails denies the load. `nil` admits nothing
-  outside the prefix.
+  registered capability the ref names, so both name and tag policies work:
+  `registry.Match("jadx.*")`, `registry.Not(registry.Tagged("admin"))`. A ref
+  naming nothing registered is denied outright — the policy cannot judge a
+  capability it cannot see, and a dormant supersession must not spring on
+  whatever registers under that name later; register the target first. A pinned
+  ref (`x.y@1`) is checked against that version; a bare ref supersedes every
+  version, so every registered version must pass, and one that fails denies the
+  load. The policy is checked again at install time, so a target registered or
+  re-tagged while the file's top level ran must pass too (the load rolls back
+  if it does not). `nil` admits nothing outside the prefix.
 - **Same filters as Go.** Script capabilities appear in every view whose filter
   admits them, and nested calls stay within the caller's view.
 

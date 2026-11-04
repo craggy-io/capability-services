@@ -35,7 +35,7 @@ func ExampleLoadScript() {
 	_, starErr := r.Invoke(ctx, "star.fail", json.RawMessage(`{"text":"x"}`))
 	fmt.Println(registry.CodeOf(goErr), registry.CodeOf(starErr), strings.Contains(starErr.Error(), "conflict: boom"))
 	// Output:
-	// star.echo@1 star.add@1 star.fail@1 star.items.list@1 star.slow@1 star.unready@1
+	// star.echo@1 star.add@1 star.fail@1 star.deny@1 star.full@1 star.admin@1 star.old@1 star.new@1 star.ver@1 star.ver@2 star.items.list@1 star.slow@1 star.unready@1
 	// {"sum":42} {"sum":42}
 	// conflict internal true
 }

@@ -35,18 +35,36 @@ func (h *handler) health(w http.ResponseWriter, r *http.Request) {
 		}
 		caps = append(caps, c)
 	}
+	body := map[string]any{"ok": ok, "capabilities": caps}
+	// A latched journal write failure means restart recovery is stale:
+	// a health failure, not healthy output (AGENTS.md).
+	if err := h.v.Registry().JobJournalError(); err != nil {
+		ok = false
+		body["ok"] = false
+		body["jobJournalError"] = err.Error()
+	}
 	status := http.StatusOK
 	if !ok {
 		status = http.StatusServiceUnavailable
 	}
-	writeJSON(w, status, map[string]any{"ok": ok, "capabilities": caps})
+	writeJSON(w, status, body)
 }
+
+// maxBodyBytes bounds one invoke request body.
+const maxBodyBytes = 32 << 20
 
 func (h *handler) invoke(w http.ResponseWriter, r *http.Request, route string) {
 	ref := refFromPath(route)
-	body, err := io.ReadAll(io.LimitReader(r.Body, 32<<20))
+	// Read one byte past the cap so an oversize body is rejected: a plain
+	// LimitReader would silently truncate it and never validate (or even
+	// read) whatever followed.
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes+1))
 	if err != nil {
 		writeErr(w, registry.WrapCode(registry.Invalid, err))
+		return
+	}
+	if len(body) > maxBodyBytes {
+		writeErr(w, registry.Errorf(registry.Invalid, "request body too large (max %d bytes)", maxBodyBytes))
 		return
 	}
 	in := json.RawMessage(body)
@@ -58,12 +76,16 @@ func (h *handler) invoke(w http.ResponseWriter, r *http.Request, route string) {
 		writeErr(w, registry.Errorf(registry.NotFound, "capability %q not found", ref))
 		return
 	}
-	if entry.Superseded() {
-		w.Header().Set(supersededHeader, strings.Join(entry.SupersededBy, ", "))
+	// The supersession header documents results, so it is set on the
+	// success paths only — never on an error response.
+	setSuperseded := func() {
+		if entry.Superseded() {
+			w.Header().Set(supersededHeader, strings.Join(entry.SupersededBy, ", "))
+		}
 	}
 	ctx := r.Context()
 	if entry.Long {
-		job, err := h.v.Start(ctx, ref, in)
+		job, err := h.v.Start(ctx, entry.Ref(), in)
 		if err != nil {
 			writeErr(w, err)
 			return
@@ -72,7 +94,13 @@ func (h *handler) invoke(w http.ResponseWriter, r *http.Request, route string) {
 			wctx, cancel := context.WithTimeout(ctx, wait)
 			out, werr := job.Wait(wctx)
 			cancel()
+			if werr != nil && job.Status().State.Terminal() {
+				// The wait raced the finish: report the job's real
+				// outcome, not the wait context's cancellation.
+				out, werr = job.Wait(context.Background())
+			}
 			if werr == nil {
+				setSuperseded()
 				writeResult(w, out)
 				return
 			}
@@ -82,15 +110,17 @@ func (h *handler) invoke(w http.ResponseWriter, r *http.Request, route string) {
 			}
 			// Still running after the wait: fall back to 202.
 		}
+		setSuperseded()
 		w.Header().Set("Location", "/v1/jobs/"+job.ID())
 		writeJSON(w, http.StatusAccepted, jobEnvelope(job, false))
 		return
 	}
-	out, err := h.v.Invoke(ctx, ref, in)
+	out, err := h.v.Invoke(ctx, entry.Ref(), in)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
+	setSuperseded()
 	writeResult(w, out)
 }
 
@@ -132,9 +162,9 @@ func (h *handler) job(w http.ResponseWriter, r *http.Request, route string) {
 	switch {
 	case isEvents && r.Method == http.MethodGet:
 		h.jobEvents(w, r, job)
-	case r.Method == http.MethodGet:
+	case !isEvents && r.Method == http.MethodGet:
 		writeJSON(w, http.StatusOK, jobEnvelope(job, true))
-	case r.Method == http.MethodDelete:
+	case !isEvents && r.Method == http.MethodDelete:
 		job.Cancel()
 		writeJSON(w, http.StatusOK, jobEnvelope(job, false))
 	default:

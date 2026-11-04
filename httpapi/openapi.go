@@ -29,16 +29,69 @@ func (h *handler) openAPIDoc() map[string]any {
 			add(base, e, false)
 		}
 	}
-	paths["/v1/"] = getOp("List capabilities (?all=1 for everything)")
-	paths["/v1/health"] = getOp("Capability readiness")
-	paths["/v1/jobs/{id}"] = map[string]any{
-		"get":    opSummary("Get a job's status (plus result on success)"),
-		"delete": opSummary("Cancel a job"),
+	jobIDParam := map[string]string{"$ref": "#/components/parameters/JobId"}
+	jobEnvelopeContent := map[string]any{
+		"application/json": map[string]any{
+			"schema": map[string]string{"$ref": "#/components/schemas/JobEnvelope"},
+		},
 	}
-	paths["/v1/jobs/{id}/events"] = getOp("Stream job events as Server-Sent Events")
+	jobOp := func(summary string) map[string]any {
+		return map[string]any{
+			"summary":    summary,
+			"parameters": []any{jobIDParam},
+			"responses": map[string]any{
+				"200": map[string]any{"description": "Job envelope", "content": jobEnvelopeContent},
+				"404": errResp("Job not found (or not visible to this caller)"),
+			},
+		}
+	}
+	// merge, never overwrite: a capability may legally be named e.g.
+	// "health", and its POST operation shares the path with the built-in
+	// GET one.
+	merge := func(path, method string, op map[string]any) {
+		item, _ := paths[path].(map[string]any)
+		if item == nil {
+			item = map[string]any{}
+			paths[path] = item
+		}
+		item[method] = op
+	}
+	merge("/v1/", "get", map[string]any{
+		"summary": "List capabilities",
+		"parameters": []any{map[string]any{
+			"name": "all", "in": "query", "required": false,
+			"description": "all=1 includes old versions and superseded capabilities",
+			"schema":      map[string]string{"type": "string"},
+		}},
+		"responses": map[string]any{"200": map[string]any{"description": "Capability descriptors"}},
+	})
+	merge("/v1/health", "get", map[string]any{
+		"summary": "Capability readiness",
+		"responses": map[string]any{
+			"200": map[string]any{"description": "Every listed capability ready"},
+			"503": map[string]any{"description": "A capability is not ready, or the job journal has failed"},
+		},
+	})
+	merge("/v1/jobs/{id}", "get", jobOp("Get a job's status (plus result on success)"))
+	merge("/v1/jobs/{id}", "delete", jobOp("Cancel a job"))
+	merge("/v1/jobs/{id}/events", "get", map[string]any{
+		"summary":    "Stream job events as Server-Sent Events",
+		"parameters": []any{jobIDParam},
+		"responses": map[string]any{
+			"200": map[string]any{
+				"description": "Job events (data: job Event JSON)",
+				"content":     map[string]any{"text/event-stream": map[string]any{}},
+			},
+			"404": errResp("Job not found (or not visible to this caller)"),
+		},
+	})
+	// Every operation also takes the session header — appended to any
+	// parameters the operation already declares, never replacing them.
 	for _, ops := range paths {
 		for _, op := range ops.(map[string]any) {
-			op.(map[string]any)["parameters"] = []any{map[string]string{"$ref": "#/components/parameters/CraggySession"}}
+			o := op.(map[string]any)
+			params, _ := o["parameters"].([]any)
+			o["parameters"] = append(params, map[string]string{"$ref": "#/components/parameters/CraggySession"})
 		}
 	}
 
@@ -52,7 +105,14 @@ func (h *handler) openAPIDoc() map[string]any {
 					"name":        sessionHeader,
 					"in":          "header",
 					"required":    false,
-					"description": "Caller session: sets Caller.Session for this request, overriding the host's caller function. Job access defaults to jobs from the caller's own session.",
+					"description": "Caller session: sets Caller.Session for this request when the host's caller (auth wrapper or Caller function) did not already set one; it never overrides theirs. Job access defaults to jobs from the caller's own session.",
+					"schema":      map[string]string{"type": "string"},
+				},
+				"JobId": map[string]any{
+					"name":        "id",
+					"in":          "path",
+					"required":    true,
+					"description": "Job ID, as returned in a 202 job envelope or by the jobs.* capabilities.",
 					"schema":      map[string]string{"type": "string"},
 				},
 			},
@@ -63,6 +123,52 @@ func (h *handler) openAPIDoc() map[string]any {
 				},
 			},
 			"schemas": map[string]any{
+				"JobEnvelope": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"job":    map[string]any{"type": "string", "description": "job ID"},
+						"status": map[string]any{"$ref": "#/components/schemas/JobStatus"},
+						"result": map[string]any{"description": "the capability's output; present on success where documented"},
+					},
+					"required": []string{"job", "status"},
+				},
+				"JobStatus": map[string]any{
+					"type":        "object",
+					"description": "A registry job status, the same shape the jobs.* capabilities return (id, capability name@version, caller, state, latest stage progress, sequence, timestamps, and on failure an error object with code, optional reason, message and retryable).",
+					"properties": map[string]any{
+						"id":         map[string]any{"type": "string"},
+						"capability": map[string]any{"type": "string"},
+						"caller":     map[string]any{"type": "object"},
+						"parent":     map[string]any{"type": "string"},
+						"state":      map[string]any{"type": "string", "enum": []string{"queued", "running", "stalled", "succeeded", "failed", "cancelled", "lost"}},
+						"last": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"stage":   map[string]any{"type": "string"},
+								"message": map[string]any{"type": "string"},
+								"done":    map[string]any{"type": "integer"},
+								"total":   map[string]any{"type": "integer"},
+								"unit":    map[string]any{"type": "string"},
+								"data":    map[string]any{},
+							},
+						},
+						"seq":          map[string]any{"type": "integer"},
+						"supersededBy": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+						"started":      map[string]any{"type": "string"},
+						"heartbeat":    map[string]any{"type": "string"},
+						"ended":        map[string]any{"type": "string"},
+						"error": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"code":      map[string]any{"type": "string"},
+								"reason":    map[string]any{"type": "string"},
+								"message":   map[string]any{"type": "string"},
+								"retryable": map[string]any{"type": "boolean"},
+							},
+						},
+					},
+					"required": []string{"id", "capability", "caller", "state", "last", "seq", "started", "heartbeat"},
+				},
 				"Error": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -133,6 +239,11 @@ func operation(e registry.Entry, pinned bool) map[string]any {
 				"Location":       map[string]any{"schema": map[string]any{"type": "string"}},
 				supersededHeader: supersededBy[supersededHeader],
 			},
+			"content": map[string]any{
+				"application/json": map[string]any{
+					"schema": map[string]string{"$ref": "#/components/schemas/JobEnvelope"},
+				},
+			},
 		}
 	}
 	responses["200"] = ok
@@ -173,9 +284,3 @@ func errResp(desc string) map[string]any {
 		},
 	}
 }
-
-func opSummary(s string) map[string]any {
-	return map[string]any{"summary": s, "responses": map[string]any{"200": map[string]any{"description": "OK"}}}
-}
-
-func getOp(s string) map[string]any { return map[string]any{"get": opSummary(s)} }

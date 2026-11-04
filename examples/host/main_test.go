@@ -54,6 +54,10 @@ func TestMCPModeKeepsStdoutForJSONRPC(t *testing.T) {
 	if !strings.Contains(stderr.String(), "registered (List):") || !strings.Contains(stderr.String(), "apk.decompile@1") {
 		t.Fatalf("listing missing from stderr:\n%s", stderr.String())
 	}
+	// The jobs group is registered (AddGroup), so it is listed too.
+	if !strings.Contains(stderr.String(), "groups:") || !strings.Contains(stderr.String(), "jobs") {
+		t.Fatalf("jobs group missing from stderr listing:\n%s", stderr.String())
+	}
 }
 
 type syncBuffer struct {

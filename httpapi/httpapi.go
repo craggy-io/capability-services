@@ -63,19 +63,33 @@ func (h *handler) callerCtx(r *http.Request) context.Context {
 		caller = h.cfg.caller(r)
 		has = true
 	}
-	if s := r.Header.Get(sessionHeader); s != "" {
-		caller.Session = s
-		has = true
+	// The header may only fill in a Session nobody with more authority
+	// already set: a session from the host's auth wrapper (ctx) or Caller
+	// function is the authenticated one, and letting any client replace
+	// it per request would let it read and cancel another session's jobs.
+	if caller.Session == "" {
+		caller.Session = r.Header.Get(sessionHeader)
 	}
-	if has {
-		ctx = registry.WithCaller(ctx, caller)
+	if !has {
+		// A remote request always carries a Caller — anonymous when the
+		// host provided no identity — so the job-access rule always
+		// applies to it. "No caller at all" is JobFor's trusted-local-Go
+		// path, which a network request must never take. Hosts that want
+		// open job access say so with registry.WithJobAccess.
+		if caller.Kind == "" {
+			caller.Kind = "http"
+		}
 	}
-	return ctx
+	return registry.WithCaller(ctx, caller)
 }
 
-// route path after stripping an optional /v1 prefix; "" means root.
+// route path after stripping an optional /v1 prefix segment; "" means
+// root. The prefix must be a whole segment: /v1health is not /v1/health.
 func (h *handler) route(p string) string {
-	p = strings.TrimPrefix(p, "/v1")
+	if p == "/v1" {
+		return ""
+	}
+	p = strings.TrimPrefix(p, "/v1/")
 	return strings.Trim(p, "/")
 }
 

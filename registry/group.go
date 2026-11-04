@@ -81,15 +81,20 @@ func (s *snapshot) groupOf(name string) string {
 }
 
 // Groups returns the registered groups with at least one List()
-// entry in this view, sorted by name.
+// entry in this view, sorted by name. Everything is derived from one
+// snapshot, so a concurrent AddGroup can never mix group names from a
+// newer snapshot with definitions from an older one.
 func (v *View) Groups() []Group {
 	s := v.reg.snap.Load()
 	seen := map[string]bool{}
 	var out []Group
-	for _, e := range v.List() {
-		if e.Group != "" && !seen[e.Group] {
-			seen[e.Group] = true
-			out = append(out, s.groups[e.Group])
+	for k, rc := range s.caps {
+		if s.current[k.name] != k.version || len(s.supBy[k]) > 0 || !v.Allows(rc.capab) {
+			continue // not a List() entry
+		}
+		if g := s.groupOf(k.name); g != "" && !seen[g] {
+			seen[g] = true
+			out = append(out, s.groups[g])
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })

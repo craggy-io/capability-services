@@ -27,12 +27,13 @@ func jobStatusSchema() *jsonschema.Schema {
     "last": {"type": "object", "description": "latest stage progress (stage, message, done, total, unit, data); never whole-job progress",
       "properties": {
         "stage": {"type": "string"}, "message": {"type": "string"},
-        "done": {"type": "integer"}, "total": {"type": "integer"}, "unit": {"type": "string"}
+        "done": {"type": "integer"}, "total": {"type": "integer"}, "unit": {"type": "string"},
+        "data": {"description": "optional structured detail the handler attached to the update"}
       }},
     "seq": {"type": "integer"},
     "supersededBy": {"type": "array", "items": {"type": "string"}},
     "started": {"type": "string"}, "heartbeat": {"type": "string"}, "ended": {"type": "string"},
-    "error": {"type": "object", "properties": {"code": {"type": "string"}, "reason": {"type": "string", "description": "optional stable lower_snake_case refinement of code, e.g. no_capacity"}, "message": {"type": "string"}}}
+    "error": {"type": "object", "properties": {"code": {"type": "string"}, "reason": {"type": "string", "description": "optional stable lower_snake_case refinement of code, e.g. no_capacity"}, "message": {"type": "string"}, "retryable": {"type": "boolean", "description": "whether the same call may succeed if retried later unchanged"}}}
   },
   "required": ["id", "capability", "caller", "state", "last", "seq", "started", "heartbeat"]
 }`))

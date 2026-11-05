@@ -65,7 +65,10 @@ summarises) and the executable package examples (`*/example_test.go`), which
 6. **This module never imports the host.** No library imports the application that
    wires it.
 
-Re-check from this module root (each command should print nothing unless noted).
+`go test -run TestArchitecture .` enforces rules 1-3 and 6 ([arch_test.go](arch_test.go)).
+It skips `_test.go` files, so re-check rule 3 for test files by hand from this
+module root, and rule 4 from a domain module's root (each command should print
+nothing unless noted).
 The `./...` forms need `script-services` resolvable (the Go workspace of the
 [README](README.md#development), or a tagged release once one exists); until
 then `go list` errors instead of printing, which is not a pass.
@@ -73,11 +76,6 @@ Import audit 2026-11-04: rules 1-3 hold for every package in this module,
 `examples/host` included; rule 4 is checked in each domain module.
 
 ```sh
-# 1. registry: no non-stdlib import except jsonschema-go, no import of this module
-go list -f '{{range .Imports}}{{println .}}{{end}}' ./registry | grep '\.' | grep -v '^github.com/google/jsonschema-go/'
-go list -f '{{range .Imports}}{{println .}}{{end}}' ./registry | grep 'craggy-io/capability-services'
-# 2. this module's packages each projection imports: registry everywhere, plus tools for mcp
-for p in jobs tools mcp httpapi starlarkcap; do echo "$p:" $(go list -f '{{range .Imports}}{{println .}}{{end}}' ./$p | grep 'craggy-io/capability-services/' | sed 's#.*/##'); done
 # 3. script-services importers among all packages, examples and test files included: prints only .../starlarkcap
 go list -f '{{.ImportPath}}:{{range .Imports}} {{.}}{{end}}{{range .TestImports}} {{.}}{{end}}{{range .XTestImports}} {{.}}{{end}}' ./... | grep 'craggy-io/script-services' | cut -d: -f1
 # 4. from a domain module's root: prints only paths of *cap adapter packages
@@ -85,11 +83,6 @@ go list -f '{{.ImportPath}}:{{range .Imports}} {{.}}{{end}}{{range .TestImports}
 ```
 
 ```powershell
-# 1.
-go list -f '{{range .Imports}}{{println .}}{{end}}' ./registry | Select-String '\.' | Select-String -NotMatch '^github.com/google/jsonschema-go/'
-go list -f '{{range .Imports}}{{println .}}{{end}}' ./registry | Select-String 'craggy-io/capability-services'
-# 2.
-foreach ($p in 'jobs','tools','mcp','httpapi','starlarkcap') { "${p}: " + ((go list -f '{{range .Imports}}{{println .}}{{end}}' "./$p" | Select-String 'craggy-io/capability-services/' | ForEach-Object { ($_ -split '/')[-1] }) -join ' ') }
 # 3. (test imports included)
 go list -f '{{.ImportPath}}:{{range .Imports}} {{.}}{{end}}{{range .TestImports}} {{.}}{{end}}{{range .XTestImports}} {{.}}{{end}}' ./... | Select-String 'craggy-io/script-services' | ForEach-Object { ($_ -split ':')[0] }
 # 4. (domain module root, test imports included)

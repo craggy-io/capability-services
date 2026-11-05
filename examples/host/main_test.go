@@ -8,7 +8,6 @@ import (
 	"go/token"
 	"io"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -75,20 +74,6 @@ func (s *syncBuffer) String() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.b.String()
-}
-
-// The example host reaches script-services only through starlarkcap.
-func TestHostImportsNoScriptServices(t *testing.T) {
-	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, parser.ImportsOnly)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, imp := range f.Imports {
-		p, _ := strconv.Unquote(imp.Path.Value)
-		if strings.HasPrefix(p, "github.com/craggy-io/script-services") {
-			t.Fatalf("examples/host imports %s", p)
-		}
-	}
 }
 
 // The curl lines in the header comment name artifacts the store holds.

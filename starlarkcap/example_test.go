@@ -8,9 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"testing/fstest"
 	"time"
 
-	"github.com/craggy-io/script-services/modules"
+	"github.com/craggy-io/foundation-kit/bundle"
+
 	"github.com/craggy-io/script-services/types"
 
 	"github.com/craggy-io/capability-services/registry"
@@ -60,29 +62,37 @@ capability(
 )
 `
 
-// Load checks a capability file, runs it, and installs what it defines
-// under its prefix. Superseding a name outside the prefix needs the host's
-// MaySupersede policy; installed capabilities record their Origin.
+// apkBundle is a bundle holding apk.star, declared as the capability file
+// for the prefix "apk", and a module it loads.
+var apkBundle = fstest.MapFS{
+	"bundle.yaml": {Data: []byte(`apiVersion: craggy.io/bundle/v1
+metadata: {id: example.apk, version: 1.0.0}
+contributions:
+  - {id: apk, kind: capability.script@1, path: apk.star}
+`)},
+	"apk.star":       {Data: []byte(apkStar)},
+	"lib/names.star": {Data: []byte("def sources_for(name):\n    return [name + '/Main.java']\n")},
+}
+
+// Load loads bundles, checks and runs each capability file they declare,
+// and installs what it defines under its prefix, the contribution id.
+// Superseding a name outside the prefix needs the host's MaySupersede
+// policy; installed capabilities record their Origin.
 func ExampleLoad() {
 	r := exampleRegistry()
 	defer r.Close()
-	src := starlarkcap.Source{
-		Filename: "apk.star",
-		Src:      []byte(apkStar),
-		Modules: modules.Map(map[string]string{
-			"lib/names.star": "def sources_for(name):\n    return [name + '/Main.java']\n",
-		}),
-	}
 	ctx := context.Background()
+	sources := []bundle.Source{bundle.Embedded("apk", apkBundle)} // bundle.Dir(dir) for a folder
 
-	_, err := starlarkcap.Load(ctx, r, "apk", src, starlarkcap.LoadOptions{})
+	_, err := starlarkcap.Load(ctx, r, sources, starlarkcap.LoadOptions{})
 	fmt.Println(registry.CodeOf(err))
 
-	l, err := starlarkcap.Load(ctx, r, "apk", src, starlarkcap.LoadOptions{MaySupersede: registry.Match("jadx.*")})
+	loaded, err := starlarkcap.Load(ctx, r, sources, starlarkcap.LoadOptions{MaySupersede: registry.Match("jadx.*")})
 	if err != nil {
 		panic(err)
 	}
-	fmt.Println(l.Prefix, l.Capabilities, l.Modules[0].Path, strings.HasPrefix(l.Digest, "sha256:"))
+	l := loaded[0]
+	fmt.Println(l.Prefix, l.Ref, l.Capabilities, l.Modules[0].Path, strings.HasPrefix(l.Digest, "sha256:"))
 	e, _ := r.Get("apk.decompile")
 	fmt.Println(e.Origin.Kind, e.Origin.Ref, e.Origin.Digest == l.Digest)
 	old, _ := r.Get("jadx.decompile")
@@ -98,11 +108,24 @@ func ExampleLoad() {
 	fmt.Println("after unload:", old.Superseded())
 	// Output:
 	// denied
-	// apk [apk.decompile@1] lib/names.star true
-	// script apk.star true
+	// apk example.apk#apk [apk.decompile@1] lib/names.star true
+	// script example.apk#apk true
 	// jadx superseded by [apk.decompile]
 	// {"sources":["art-1.apk/Main.java"]} <nil>
 	// after unload: false
+}
+
+// oneFile is a bundle "example.caps" holding src as the capability file
+// for the prefix "apk".
+func oneFile(src string) []bundle.Source {
+	return []bundle.Source{bundle.Embedded("caps", fstest.MapFS{
+		"bundle.yaml": {Data: []byte(`apiVersion: craggy.io/bundle/v1
+metadata: {id: example.caps, version: 1.0.0}
+contributions:
+  - {id: apk, kind: capability.script@1, path: apk.star}
+`)},
+		"apk.star": {Data: []byte(src)},
+	})}
 }
 
 // The file is checked before anything runs: a typo rejects the load with
@@ -114,11 +137,14 @@ func ExampleLoad_checkFirst() {
 print("never printed")
 capability(name = "apk.info", run = _infoo)
 `
-	_, err := starlarkcap.Load(context.Background(), r, "apk", starlarkcap.Source{Filename: "apk.star", Src: []byte(src)}, starlarkcap.LoadOptions{})
+	_, err := starlarkcap.Load(context.Background(), r, oneFile(src), starlarkcap.LoadOptions{})
 	fmt.Println(err)
+	var le *bundle.LoadError
+	fmt.Println(errors.As(err, &le), le.Diagnostics[0].Line)
 	// Output:
-	// invalid: load apk.star: check failed:
-	// apk.star:3:37: error: undefined: _infoo
+	// invalid: load failed:
+	// apk.star:3:37: error: undefined: _infoo (script.check)
+	// true 3
 }
 
 const declarations = `package apk
@@ -139,8 +165,7 @@ func ExampleLoad_types() {
 		panic(err)
 	}
 	src := `capability(name = "apk.name", input = "DecompileIn", run = lambda ctx, i: {"artifact": i["artifact"]})`
-	if _, err := starlarkcap.Load(context.Background(), r, "apk", starlarkcap.Source{Filename: "apk.star", Src: []byte(src)},
-		starlarkcap.LoadOptions{Types: pkg}); err != nil {
+	if _, err := starlarkcap.Load(context.Background(), r, oneFile(src), starlarkcap.LoadOptions{Types: pkg}); err != nil {
 		panic(err)
 	}
 	e, _ := r.Get("apk.name")
@@ -160,7 +185,7 @@ func ExampleLoad_errors() {
 	defer r.Close()
 	src := `capability(name = "apk.lock", input = {"id": schema.string(required = True)},
            run = lambda ctx, i: ctx.call("storage.artifact.lock", id = i["id"]))`
-	if _, err := starlarkcap.Load(context.Background(), r, "apk", starlarkcap.Source{Filename: "apk.star", Src: []byte(src)}, starlarkcap.LoadOptions{}); err != nil {
+	if _, err := starlarkcap.Load(context.Background(), r, oneFile(src), starlarkcap.LoadOptions{}); err != nil {
 		panic(err)
 	}
 	_, err := r.Invoke(context.Background(), "apk.lock", json.RawMessage(`{"id":"art-1"}`))
@@ -232,9 +257,9 @@ other = storage.artifact.get(idd = "art-1")
 	// 3:9 error: storage.artifact.get requires input "id"
 }
 
-// Watch loads every top-level *.star file in a directory under the prefix
-// named by its stem, and reloads on change. The initial scan finishes
-// before Watch returns.
+// Watch loads bundles into a bundle.Live, installs every capability file
+// they declare, and reinstalls on change. Test files declared beside them
+// are left for Test. The initial install finishes before Watch returns.
 func ExampleWatch() {
 	r := exampleRegistry()
 	defer r.Close()
@@ -248,12 +273,18 @@ func ExampleWatch() {
 			panic(err)
 		}
 	}
+	write("bundle.yaml", `apiVersion: craggy.io/bundle/v1
+metadata: {id: example.hello, version: 1.0.0}
+contributions:
+  - {id: hello, kind: capability.script@1, path: hello.star}
+  - {id: hello-test, kind: craggy.script-test@1, path: hello_test.star}
+`)
 	write("hello.star", `capability(name = "hello.world", run = lambda ctx, i: {"hi": True})`)
-	write("hello_test.star", "def test_hi():\n    assert.true(hello.world()[\"hi\"])\n") // tests are not loaded
+	write("hello_test.star", "def test_hi():\n    assert.true(hello.world()[\"hi\"])\n") // not installed
 
 	w, err := starlarkcap.Watch(context.Background(), r, starlarkcap.WatchOptions{
-		Dir:      dir,       // read through an os.Root: symbolic links cannot leave dir
-		Interval: time.Hour, // this example only shows the initial scan
+		Sources:  []bundle.Source{bundle.Dir(dir)}, // read through an os.Root; symbolic links are refused
+		Interval: time.Hour,                        // this example only shows the initial install
 		OnResult: func(prefix string, l starlarkcap.Loaded, err error) {
 			fmt.Println(prefix, l.Capabilities, err)
 		},
@@ -266,5 +297,5 @@ func ExampleWatch() {
 	fmt.Println(e.Origin.Ref)
 	// Output:
 	// hello [hello.world@1] <nil>
-	// hello.star
+	// example.hello#hello
 }

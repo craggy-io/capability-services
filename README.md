@@ -76,10 +76,10 @@ err := r.Add(
 err = r.Add(jobs.Capabilities()...) // jobs.list/get/wait/cancel
 err = r.AddGroup(jobs.Group())
 
-// Runtime-defined capabilities, under the "apk" prefix. Superseding a name
-// outside the prefix needs the host's policy.
-loaded, err := starlarkcap.Load(ctx, r, "apk",
-	starlarkcap.Source{Filename: "apk.star", Src: src},
+// Runtime-defined capabilities from a bundle: ./caps/bundle.yaml declares
+// {id: apk, kind: capability.script@1, path: apk.star}, so apk.star defines
+// apk.*. Superseding a name outside the prefix needs the host's policy.
+loaded, err := starlarkcap.Load(ctx, r, []bundle.Source{bundle.Dir("caps")},
 	starlarkcap.LoadOptions{MaySupersede: registry.Match("jadx.*")})
 
 agents := r.View(registry.And(
@@ -106,7 +106,7 @@ From the module root (see [Development](#development) for the workspace setup):
 go run ./examples/host                  # HTTP on :8080
 go run ./examples/host -addr :9000      # another address
 go run ./examples/host -mcp             # MCP over stdio
-go run ./examples/host -scripts ./caps  # also load and hot-reload ./caps/*.star
+go run ./examples/host -scripts ./caps  # also load and hot-reload the bundle in ./caps
 ```
 
 ```sh
@@ -121,15 +121,18 @@ curl localhost:8080/v1/openapi.json
 curl localhost:8080/v1/health
 ```
 
-At startup the host loads a built-in `apk.star` that supersedes the Go-registered
+At startup the host loads its built-in demo bundle
+([examples/host/demo](examples/host/demo/bundle.yaml), embedded), whose `apk.star`
+supersedes the Go-registered
 `jadx.decompile`, with `LoadOptions.MaySupersede` admitting `jadx.*` and nothing
 else. `jadx.decompile` drops out of `/v1/` listings and MCP tools but still
 answers, with a `Craggy-Superseded-By` header, until `apk` is unloaded, when it
-returns. With `-scripts DIR`, every top-level `*.star` file in `DIR` (other than
-`*_test.star`) defines the capabilities under its file stem, `load()` resolves
-against `DIR` (read through an `os.Root`, so symbolic links cannot reach outside
-it), a `DIR/types.go` declares types for every file, and edits are picked up within
-a second; a file named `apk.star` replaces the built-in demo. The host prints its
+returns. With `-scripts DIR`, `DIR` is a bundle and **must contain a
+`bundle.yaml`**: each capability file is a `capability.script@1` contribution
+whose id is its prefix, `load()` resolves inside the bundle (read through an
+`os.Root`; symbolic links are refused), a file may declare a `.go` types asset,
+and edits are picked up within a second. The demo owns the `apk` prefix, so a
+file with the id `apk` is refused with `conflict`. The host prints its
 capability listing at startup: to stdout in HTTP mode, and to stderr in `-mcp`
 mode, where stdout carries only the JSON-RPC stream. Logs go to stderr.
 
@@ -167,10 +170,13 @@ mode, where stdout carries only the JSON-RPC stream. Logs go to stderr.
   stays visible in the message (`internal: apk.lock: apk.star:2:41: conflict: ...`).
 - **Scripts supersede only what the host allows.** A capability file may
   supersede anything under its own prefix, and outside it only what
-  `LoadOptions.MaySupersede` admits. Under `Watch`, a file stem claims its whole
-  prefix: `jadx.star` replaces every `jadx.*` capability, Go-registered ones
-  included. One file owns one prefix: `Watch` rejects a stem containing `.`, and
-  `Load` refuses (`conflict`) to replace capabilities another file loaded.
+  `LoadOptions.MaySupersede` admits.
+- **Capability files come from bundles.** A folder of capability files needs a
+  `bundle.yaml` declaring each one; its contribution id is its prefix (no `.`),
+  and nothing is discovered from file names. A prefix claims its whole name: a
+  file `jadx` replaces every `jadx.*` capability, Go-registered ones included. One
+  file owns one prefix: an install refuses (`conflict`) to replace capabilities
+  another file installed.
 - **`Func` panics** on programmer errors (nil function, underivable schema, such
   as recursive types; override those with `WithInput`/`WithOutput`).
   Registry-state errors (duplicate `name@version`, bad names, supersession cycles,
@@ -183,8 +189,9 @@ integration and repository development guidance, see [AGENTS.md](AGENTS.md).
 ## Development
 
 Requires Go 1.27 or newer. Dependencies: `github.com/google/jsonschema-go`,
-`github.com/modelcontextprotocol/go-sdk`, `go.starlark.net` and
-`github.com/craggy-io/script-services`.
+`github.com/modelcontextprotocol/go-sdk`, `go.starlark.net`,
+`github.com/craggy-io/script-services` and `github.com/craggy-io/foundation-kit`
+(bundles, and `archtest` for the import rules).
 
 **Depends on a published script-services.** [go.mod](go.mod) requires
 `github.com/craggy-io/script-services` like any other dependency, at its

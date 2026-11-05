@@ -1,4 +1,4 @@
-# apk.star defines the apk.* capabilities (prefix = file stem).
+# apk.star defines the apk.* capabilities (prefix = contribution id "apk").
 load("//lib/names.star", "java_sources")
 
 def _decompile(ctx, input):

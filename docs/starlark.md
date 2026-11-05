@@ -9,7 +9,8 @@ that imports `github.com/craggy-io/script-services`, the generic Starlark runtim
 
 Connect scripts and the registry in both directions: scripts **call**
 capabilities (`Globals`, `Exec`, checked statically by `Check`), and scripts
-**define** capabilities (`Load`, kept current by `Watch`, tested by `Test`).
+**define** capabilities (capability files in bundles: `Load`, kept current by
+`Watch`, tested by `Test`).
 
 ## Features
 
@@ -20,12 +21,15 @@ capabilities (`Globals`, `Exec`, checked statically by `Check`), and scripts
   with backtraces, and cleanup of jobs a failed script started.
 - Static checks against a view (`Check`, `Analyze`, `AnalyzeWith`, `Env`) with
   nearest-name suggestions, run before anything executes.
-- Capability files (`Load`): prefix-scoped names, one file per prefix, the host's
-  supersession policy, check before install, schemas from `schema.*`, field dicts,
-  raw JSON Schema or declared Go-syntax types, readiness checks, and `Origin` with
-  a digest of the file, its modules and its types.
-- Hot reload of a directory (`Watch`, confined to it by an `os.Root`) and
-  Starlark tests (`Test`).
+- Capability files, read only from bundles with a `bundle.yaml` (the
+  `capability.script@1` kind, `Script`): the contribution id is the prefix, one
+  file per prefix, the host's supersession policy, check before anything runs,
+  schemas from `schema.*`, field dicts, raw JSON Schema or declared Go-syntax
+  types, readiness checks, and `Origin` with a digest of the file, its modules and
+  its types.
+- Loading through foundation-kit's `bundle.Load` (`Load`, or `Compilers` and
+  `Install` for a host's own catalog), hot reload through `bundle.Live` (`Watch`),
+  and Starlark tests declared in the same bundle (`Test`).
 
 ## Mental model
 
@@ -33,13 +37,17 @@ capabilities (`Globals`, `Exec`, checked statically by `Check`), and scripts
              Globals / Exec / Check                  Load / Watch / Test
  script ───────────────────────────► registry ◄─────────────────────────── capability file
          calls through ViewFrom(ctx)            Replace(prefix, caps...)
+
+ bundle.yaml ─► bundle.Load / bundle.Live ─► Compilers (starcompile) ─► *File ─► Install
 ```
 
 Everything generic comes from script-services: the dialect (Starlark plus
 `set()`, `while`, top-level control flow and global reassignment; no recursion),
 value conversion between Starlark, Go and JSON, the `schema` module and
-`types.go` declarations, `load()` resolution with content digests, static checks,
-and the `*_test.star` runner with its `assert` module. Read that module's guides
+Go-syntax type declarations, `load()` resolution with content digests, static
+checks, the shared `.star` compiler (`starcompile`) and the test runner
+(`startest`) with its `assert` module. Bundles, their manifests, reloading and
+installing are foundation-kit's `bundle` package. Read that module's guides
 for those rules. `starlarkcap` supplies the registry side: the built-ins, the
 `capability()` function, call hooks, job tracking and error mapping.
 
@@ -61,21 +69,28 @@ artifacts and audit records is the host's.
 - `Check(v, filename, src, extra...) []Diagnostic`, `Analyze(...) Analysis`,
   `AnalyzeWith(v, filename, src, CheckOptions{Extra, Modules}) Analysis`,
   `Env(v) check.Env`; `Analysis{Diagnostics, Uses, Loads}`.
-- `Load(ctx, r, prefix, Source, LoadOptions) (Loaded, error)`;
-  `Source{Filename, Src, Modules}`; `LoadOptions{Limits, Print, Types,
-  TypesDigest, MaySupersede}`; `TypesDigest(src) string`; `Loaded{Prefix, Digest,
-  Modules, Capabilities, Diagnostics}`.
-- `Watch(ctx, r, WatchOptions{Dir, Root, Interval, Load, OnResult}) (*Watcher,
-  error)`; `(*Watcher).Close()`; `TypesFile` (`"types.go"`).
-- `Test(t, r, fsys)`.
+- `Script` (`kind.Kind[*File]`, `capability.script@1`, global); `*File` with
+  `Prefix`, `Ref`, `Digest`, `Modules`, `Capabilities`, `Diagnostics`;
+  `CodePrefix`, `CodeTypes`.
+- `Compilers(LoadOptions) []bundle.AnyCompiler`;
+  `Load(ctx, r, []bundle.Source, LoadOptions) ([]Loaded, error)`;
+  `Install(ctx, r, *bundle.Catalog, LoadOptions) ([]Loaded, error)`;
+  `LoadOptions{Limits, Print, Types, TypesDigest, MaySupersede}`;
+  `TypesDigest(src) string`; `Loaded{Prefix, Ref, Digest, Modules, Capabilities,
+  Diagnostics}`.
+- `Watch(ctx, r, WatchOptions{Sources, Interval, Load, OnResult, OnError})
+  (*Watcher, error)`; `(*Watcher).Close()`.
+- `Test(t, r, fsys, LoadOptions)`.
 
-Types from script-services that appear in this API: `modules.Source` (for
-example `modules.DirRoot(dir)` for a directory on disk, `modules.Dir(fsys)` for an
-`embed.FS`, or `modules.Map(files)`), `*modules.Loader`, `modules.Ref`,
-`*types.Package` (from `types.Parse`), `check.Diagnostic`, `check.Env`,
-`script.Limits`, `script.Position`. `Limits`, `Position` and `Frame` are aliased
-here, so a host needs script-services' `modules` and `types` packages only for
-`Source.Modules`, `Program.Modules` and `LoadOptions.Types`.
+Types from other modules that appear in this API: foundation-kit's
+`bundle.Source` (`bundle.Dir(dir)` for a folder, `bundle.Embedded(name, fsys)` for
+an `embed.FS` or `fstest.MapFS`), `bundle.Catalog`, `bundle.Diagnostic`,
+`bundle.AnyCompiler` and `bundle.Ref`; script-services' `*modules.Loader` and
+`modules.Source` (for `Exec` and `AnalyzeWith`), `modules.Ref`, `*types.Package`
+(from `types.Parse`), `check.Diagnostic`, `check.Env`, `script.Limits`,
+`script.Position`. `Limits`, `Position` and `Frame` are aliased here, so a host
+needs script-services' `modules` and `types` packages only for `Program.Modules`,
+`CheckOptions.Modules` and `LoadOptions.Types`.
 
 ## Globals: calling capabilities
 
@@ -153,22 +168,64 @@ parse and define the loaded names. `Env(v)` is the underlying `check.Env`, for
 hosts that call script-services' checker directly. An empty result means every
 reference the checker can see resolves; it says nothing about runtime values.
 
+## Capability files and bundles
+
+Capability files are read only from bundles. A folder (or `embed.FS`) needs a
+`bundle.yaml` at its root that declares each file as a contribution of the kind
+`capability.script@1`; nothing is discovered from file names, and a folder with
+no `bundle.yaml` does not load:
+
+```yaml
+apiVersion: craggy.io/bundle/v1
+metadata: {id: example.apk, version: 1.0.0}
+contributions:
+  - {id: apk, kind: capability.script@1, path: apk.star}           # defines apk.*
+  - {id: scan, kind: capability.script@1, path: tools/scanner.star, assets: [assets/types.go]}
+  - {id: apk-test, kind: craggy.script-test@1, path: apk_test.star} # run by Test only
+```
+
+- **The contribution id is the prefix**, whatever the file is called. It must be a
+  capability name with no `.` (`[a-z0-9-]+`): one file defines one top-level
+  prefix, so prefixes never nest. Otherwise the load fails with
+  `capability.script.prefix`.
+- **Modules** are support files of the same bundle, loaded as `//lib/x.star` or
+  relative to the file, or files of a bundle declared in `dependencies`, loaded as
+  `@<bundle-id>/x.star` (script-services' `modules.FromContribution`). They are
+  not declared as contributions.
+- **Types**: a contribution may list one asset whose path ends in `.go` (such as
+  `assets/types.go`) with Go-syntax type declarations for that file. With
+  `LoadOptions.Types` set by the host, such an asset is an error
+  (`capability.script.types`).
+- **Tests** are `craggy.script-test@1` contributions (paths ending in
+  `_test.star`). `Load` and `Watch` accept them without checking or running them;
+  `Test` runs them.
+- The kind is global: two bundles in one catalog cannot both define a prefix
+  (`bundle.id_conflict`) unless a bundle override replaces one with the other.
+
 ## Load: defining capabilities
 
-`Load(ctx, r, prefix, src, opts)` installs the capabilities a file defines under
-`prefix`:
+`Load(ctx, r, sources, opts)` runs `bundle.Load` over `sources` with
+`Compilers(opts)` and installs every capability file of the catalog with
+`Install`. A host that builds its own catalog (with other kinds, overrides or a
+`bundle.Live`) adds `Compilers(opts)` to its compilers and calls
+`Install(ctx, r, catalog, opts)`.
 
-1. **Check.** The file is analysed with `capability` and `schema` predeclared and
-   its `load()` targets looked up in `src.Modules`. Any error diagnostic rejects
-   the load with `invalid` and the positioned diagnostics; nothing has run.
-   Warnings are returned in `Loaded.Diagnostics`.
-2. **Run.** The file's top level executes under `opts.Limits` (zero means
-   `DefaultLimits`), with `print` to `opts.Print`. Each `capability(...)` call is
-   validated as it runs.
-3. **Install.** If `r.Replace(prefix)` would remove a capability another file
-   loaded (see [one file per prefix](#load-policy)), the load fails with
-   `conflict`. Otherwise `r.Replace(prefix, defs...)` swaps the prefix
-   atomically. Any failure in any step leaves the registry unchanged.
+1. **Check.** Each file is analysed with `capability` and `schema` predeclared and
+   its `load()` targets looked up in its bundle and declared dependencies. Any
+   error diagnostic fails the load with `invalid` and the positioned diagnostics;
+   nothing has run. Warnings are in `Loaded.Diagnostics`.
+2. **Run.** The file's top level executes once, while the catalog compiles, under
+   `opts.Limits` (zero means `DefaultLimits`), with `print` to `opts.Print`. Each
+   `capability(...)` call is validated as it runs. Compiling touches no registry,
+   and `bundle.Live` reuses a compiled file until its bundle or a dependency
+   changes.
+3. **Install.** For each file, in catalog order: if `r.Replace(prefix)` would
+   remove a capability another file installed (see
+   [one file per prefix](#load-policy)), it fails with `conflict`; the
+   supersession policy is checked against the registry as it stands; then
+   `r.Replace(prefix, defs...)` swaps the prefix atomically. `Load` and `Install`
+   are all or nothing: a failure rolls back the files installed before it, and a
+   bundle that fails to load installs nothing.
 
 ```python
 capability(name, version=1, title="", description="", input=None, output=None,
@@ -178,7 +235,7 @@ capability(name, version=1, title="", description="", input=None, output=None,
 
 - `input`/`output`: a `schema.*` value, a field dict
   (`{"artifact": schema.string(required = True)}`), a raw JSON Schema dict, a JSON
-  string, or, with `LoadOptions.Types`, a declared type's name
+  string, or, with `LoadOptions.Types` or a types asset, a declared type's name
   (`input = "DecompileIn"`, or `schema.type("DecompileIn")`).
 - `effects`: `"read_only"`, `"idempotent"`, `"destructive"`, `"open_world"`.
   `heartbeat` is in seconds. `accepts`/`emits` entries are type strings or
@@ -202,117 +259,118 @@ loads".
 
 - **Prefix-scoped names.** Every capability must be named `prefix` or under
   `prefix.`; otherwise the load fails with `invalid` at the offending line.
-- **One file per prefix.** A load fails with `conflict`, naming the other file,
-  when `r.Replace(prefix)` would remove a capability another file installed with
-  `Load` (its `Origin.Kind` is `"script"` and its `Origin.Ref` a different
-  filename): loading `a` from `a.star` would otherwise wipe `a.b.*` loaded from
-  `a.b.star`, in either order. The same file reloads freely, and Go-registered
-  capabilities under the prefix are replaced as before. To move capabilities
-  between files, unload the old one first (`r.Replace(its prefix)`). The check
-  and the swap are two steps, so serialise concurrent loads of overlapping
-  prefixes (`Watch` loads one file at a time).
+- **One file per prefix.** An install fails with `conflict`, naming the other
+  file, when `r.Replace(prefix)` would remove a capability another file installed
+  (its `Origin.Kind` is `"script"` and its `Origin.Ref` a different contribution
+  `owner#id`). The same contribution reinstalls freely, and Go-registered
+  capabilities under the prefix are replaced as before. To move a prefix to
+  another bundle outside `Watch`, unload it first (`r.Replace(prefix)`); `Watch`
+  moves its own. The check and the swap are two steps, so serialise concurrent
+  installs of the same prefix (`Watch` installs one file at a time).
 - **Supersession.** A capability may supersede any ref under its prefix. A ref
-  outside the prefix needs `LoadOptions.MaySupersede` to admit it, else the load
-  fails with `denied` and installs nothing. The filter is called with the
-  registered capability the ref names, so both name and tag policies work:
+  outside the prefix needs `LoadOptions.MaySupersede` to admit it, else the
+  install fails with `denied`. The filter is called with the registered
+  capability the ref names, so both name and tag policies work:
   `registry.Match("jadx.*")`, `registry.Not(registry.Tagged("admin"))`. A ref
   naming nothing registered is denied outright — the policy cannot judge a
   capability it cannot see, and a dormant supersession must not spring on
   whatever registers under that name later; register the target first. A pinned
   ref (`x.y@1`) is checked against that version; a bare ref supersedes every
   version, so every registered version must pass, and one that fails denies the
-  load. The policy is checked again at install time, so a target registered or
-  re-tagged while the file's top level ran must pass too (the load rolls back
-  if it does not). `nil` admits nothing outside the prefix.
+  install. The policy is checked at install time, against the registry as it
+  then stands, not while the file compiles. `nil` admits nothing outside the
+  prefix.
 - **Same filters as Go.** Script capabilities appear in every view whose filter
   admits them, and nested calls stay within the caller's view.
 
 ### Origin and digests
 
-Every installed capability gets `Origin{Kind: "script", Ref: src.Filename,
-Digest: Loaded.Digest}`, visible as `Entry.Origin` and `Descriptor.origin` (the
-HTTP listing). Without types, `Loaded.Digest` is the content address
-script-services computes for a program (`script.Result.Digest`, built with
-`modules.Digest`): it covers the file's text and each direct `load()`
-dependency, the spec as written paired with that module's digest, so modules
-further down count through their parents' digests; it does not cover where the
-files live. `Loaded.Modules` lists every module loaded, transitively, with its
-path and digest. A module change changes the digest of every file that loads it,
-on its next load. The exact module digest construction is script-services'; see
-its modules guide.
+Every installed capability gets `Origin{Kind: "script", Ref: "owner#id",
+Digest: Loaded.Digest}` (the contribution, such as `example.apk#apk`, also in
+`Loaded.Ref`), visible as `Entry.Origin` and `Descriptor.origin` (the HTTP
+listing). Without types, `Loaded.Digest` is the script digest script-services'
+compiler computes (`starcompile.Unit.Ref().Digest`, built with `modules.Digest`,
+equal to `script.Result.Digest` for the same file): it covers the file's text and
+each direct `load()` dependency, the spec as written paired with that module's
+digest, so modules further down count through their parents' digests; it does not
+cover where the files live. `Loaded.Modules` lists every module loaded,
+transitively, with its path and digest. A module change changes the digest of
+every file that loads it.
 
-A `*types.Package` keeps no source, so `Load` cannot hash the declarations
-behind `LoadOptions.Types` itself. Pass `LoadOptions.TypesDigest` (use
-`starlarkcap.TypesDigest(src)` on the text you parsed) and `Loaded.Digest`
-becomes a SHA-256, under the tag `craggy-capability-file-v1`, over the script
-digest and the types digest: a changed declaration then changes the digest of
-every file loaded with it. With `Types` and no `TypesDigest` the digest does not
-cover the declarations. `Watch` sets both for its `types.go`.
+With a types asset, or `LoadOptions.TypesDigest` beside `LoadOptions.Types` (use
+`starlarkcap.TypesDigest(src)` on the text you parsed: a `*types.Package` keeps
+no source), `Loaded.Digest` is a SHA-256, under the tag
+`craggy-capability-file-v1`, over the script digest and the types digest, so a
+changed declaration changes the digest of every file typed by it. With `Types`
+and no `TypesDigest` the digest does not cover the declarations.
 
 ## Watch: hot reload
 
-`Watch(ctx, r, WatchOptions{Dir: dir, ...})` loads every top-level `*.star` file
-in the directory except `*_test.star`, each under the prefix named by its stem
-(`apk.star` defines `apk.*`), with `load()` resolving against the same
-directory, and polls every `Interval` (default one second).
+`Watch(ctx, r, WatchOptions{Sources: []bundle.Source{bundle.Dir(dir)}, ...})`
+holds the sources in a `bundle.Live` with `Compilers(opts.Load)`, installs every
+capability file of the first catalog before it returns, and applies each new
+catalog to the registry. The Live reloads every `Interval` (default one second)
+with `Run`; a `Subscribe` callback applies the result.
 
-- **The directory confines the files.** `Dir` is opened with `modules.DirRoot`,
-  an `os.Root`: no path, `..` or symbolic link reaches outside it, so a symlinked
-  capability file or module pointing elsewhere does not load. `Root` takes an
-  `fs.FS` instead, for an `embed.FS`, an `fstest.MapFS` or an `os.Root`'s FS
-  (`root, _ := os.OpenRoot(dir); root.FS()`); do not pass `os.DirFS(dir)`, which
-  follows symbolic links out of the directory. Set exactly one.
-- A file reloads when its text changes, when any module it loaded changes, or
-  when the types file changes. A failed reload keeps the previous version
-  installed and reports the error; a file that has never loaded retries whenever
-  any `.star` file under the root changes.
-- Removing a file unloads its prefix with `r.Replace(prefix)`.
-- `OnResult(prefix, loaded, err)` is called after every load, reload and unload
-  (an unload reports a `Loaded` with only `Prefix` set), and once for each
-  rejected file, from the watcher's goroutine (from `Watch` itself during the
-  initial scan).
-- The initial scan finishes before `Watch` returns. `Close` (or the context
-  ending) stops polling; installed capabilities stay installed. `Close` waits for
-  a scan in progress, except when called from `OnResult`: on the watcher's own
-  goroutine it stops the watcher without waiting for itself.
+- **Bundles only.** Every source needs its `bundle.yaml`. Declare a contribution
+  to add a file; remove it from the manifest to unload the prefix with
+  `r.Replace(prefix)`. Modules and test files are not watched as capability files.
+- **The first load must succeed.** Otherwise `Watch` returns the error
+  (`invalid`, with the diagnostics and the `*bundle.LoadError`) and starts nothing.
+- **Reloads are whole-catalog.** When any bundle fails to load (a syntax error in
+  one file, a missing module, an invalid manifest), the previous catalog stays
+  current, every installed file stays as it was, and `OnError` receives the
+  error. Fix the problem and the next reload applies.
+- **What reinstalls.** A file reinstalls when its digest or its contribution
+  changes: its text, any module it loads, or its types. Files whose digest is
+  unchanged are left alone even when another file of their bundle changed. A file
+  whose install was refused (`conflict`, `denied`) is retried with every new
+  catalog. Moving a prefix between watched bundles is a reinstall, not a conflict.
+- **Confined to the bundle.** `bundle.Dir` reads through an `os.Root`, and
+  `bundle.Load` refuses symbolic links and paths that leave the bundle, so a
+  symlinked capability file or module fails the load.
+- `OnResult(prefix, loaded, err)` is called after every install, reinstall and
+  unload (an unload reports a `Loaded` with only `Prefix` set), and for every
+  refused install, from the watcher's goroutine (from `Watch` itself for the first
+  catalog). `OnError(err)` is called for each failed reload.
+- `Close` (or the context ending) stops reloading; installed capabilities stay
+  installed. `Close` waits for a reload in progress, except when called from
+  `OnResult` or `OnError`: on the watcher's own goroutine it stops the watcher
+  without waiting for itself, and the catalog being applied installs and unloads
+  nothing more.
 - `WatchOptions.Load` applies to every file, including its `MaySupersede` policy.
-- **Types.** Unless `WatchOptions.Load.Types` is set, a `types.go`
-  (`starlarkcap.TypesFile`) in the root is parsed and passed to every file as
-  `LoadOptions.Types`, with `TypesDigest` set, so the declarations count in every
-  `Loaded.Digest`. When it changes, appears or disappears every file reloads;
-  while it does not parse, every (re)load fails with its error and previous
-  versions stay installed.
-- **One file defines one prefix.** A stem containing `.` (`apk.extra.star`) is
-  rejected and reported with `invalid`: its prefix would nest inside `apk.star`'s,
-  whose `Replace("apk")` would wipe it. Define `apk.extra.*` capabilities in
-  `apk.star`.
-- **A stem claims its whole prefix.** `jadx.star` replaces every `jadx.*`
-  capability, Go-registered ones included, and removing it unloads them all. Use
-  a directory whose stems are reserved for scripts. A stem must be a valid
-  capability name, or its load fails.
+- **A prefix claims its whole name.** A file `jadx` replaces every `jadx.*`
+  capability, Go-registered ones included, and unloading it unloads them all. Use
+  ids reserved for scripts.
 
 ## Test: Starlark tests
 
-`Test(t, r, fsys)` runs every `*_test.star` file in `fsys` as Go subtests (see
-script-services' `startest`). Test files and the modules they load see `assert`
-plus the capability globals of `r.View(registry.All)` (namespaces, `call()`,
-`jobs.start`), so they call capabilities exactly as scripts do, including ones a
-capability file defined through `Load`. See
-[scripttest_test.go](../starlarkcap/scripttest_test.go) and its fixtures in
-[testdata/scripts](../starlarkcap/testdata/scripts/apk_test.star). For a
-directory on disk pass an `os.Root`'s FS, which keeps symbolic links inside it:
+`Test(t, r, fsys, opts)` loads the bundle rooted at `fsys` and runs every
+`craggy.script-test@1` contribution it declares as Go subtests (see
+script-services' `startest`); an undeclared `*_test.star` file does not run. Test
+files and the modules they load see `assert` plus the capability globals of
+`r.View(registry.All)` (namespaces, `call()`, `jobs.start`), so they call
+capabilities exactly as scripts do, including ones a capability file installed
+through `Load`. The bundle's capability files compile with `opts` but are not
+installed by `Test`: install them first. See
+[scripttest_test.go](../starlarkcap/scripttest_test.go) and its bundle in
+[testdata/scripts](../starlarkcap/testdata/scripts/bundle.yaml). For a directory
+on disk pass an `os.Root`'s FS, which keeps symbolic links inside it:
 
 ```go
 func TestCapabilities(t *testing.T) {
 	r := registry.New()
 	defer r.Close()
-	// ... add Go capabilities, Load the .star files under test ...
+	// ... add Go capabilities ...
+	if _, err := starlarkcap.Load(t.Context(), r, []bundle.Source{bundle.Dir("testdata/scripts")}, starlarkcap.LoadOptions{}); err != nil {
+		t.Fatal(err)
+	}
 	root, err := os.OpenRoot("testdata/scripts")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer root.Close()
-	starlarkcap.Test(t, r, root.FS())
+	starlarkcap.Test(t, r, root.FS(), starlarkcap.LoadOptions{})
 }
 ```
 
@@ -331,16 +389,19 @@ def test_input_is_validated():
 
 `starlarkcap` imports `registry` and script-services. The
 [conformance suite](conformance.md) loads its Starlark capability set with `Load`
-and runs the Starlark projection beside the others. Hosts combine `Exec` with
-their own `Predeclared` built-ins and `modules.Loader`, and `Load`/`Watch` with
-their supersession policy.
+from an in-memory bundle and runs the Starlark projection beside the others.
+Hosts combine `Exec` with their own `Predeclared` built-ins and `modules.Loader`,
+and `Load`/`Install`/`Watch` with their supersession policy. Capability files
+compile through script-services' `starcompile` and load through foundation-kit's
+`bundle`, the same path as every other kind of authored content.
 
 ## Examples
 
 Compiled and checked by `go test`, in
 [starlarkcap/example_test.go](../starlarkcap/example_test.go):
 
-- `ExampleLoad`: a file with a shared module supersedes `jadx.decompile`; denied
+- `ExampleLoad`: a bundle whose file loads a shared module supersedes
+  `jadx.decompile`; denied
   without a policy, allowed with `MaySupersede: registry.Match("jadx.*")`; `Origin`
   and digest; unloading restores the original.
 - `ExampleLoad_checkFirst`: a typo rejects the load before the file runs.
@@ -349,26 +410,28 @@ Compiled and checked by `go test`, in
 - `ExampleExec`: hooks, print positions, an unhandled `not_found` and its
   `Error()` text.
 - `ExampleCheck`: diagnostics with suggestions ("unknown capability ...").
-- `ExampleWatch`: the initial scan of a directory opened with `Dir`.
+- `ExampleWatch`: the initial install of a bundle directory (`bundle.Dir`) that
+  also declares a test file.
 
 ```go
-l, err := starlarkcap.Load(ctx, r, "apk", starlarkcap.Source{
-	Filename: "apk.star",
-	Src:      []byte(apkStar),
-	Modules:  modules.Map(map[string]string{"lib/names.star": "def sources_for(name): ..."}),
-}, starlarkcap.LoadOptions{MaySupersede: registry.Match("jadx.*")})
-// l.Capabilities == [apk.decompile@1], l.Modules[0].Path == "lib/names.star"
-// r.Get("apk.decompile").Origin == {script apk.star <l.Digest>}
+loaded, err := starlarkcap.Load(ctx, r, []bundle.Source{bundle.Dir("caps")},
+	starlarkcap.LoadOptions{MaySupersede: registry.Match("jadx.*")})
+// caps/bundle.yaml declares {id: apk, kind: capability.script@1, path: apk.star}
+// loaded[0].Capabilities == [apk.decompile@1], loaded[0].Modules[0].Path == "lib/names.star"
+// r.Get("apk.decompile").Origin == {script example.apk#apk <loaded[0].Digest>}
 // r.Get("jadx.decompile").SupersededBy == [apk.decompile]
 ```
 
 ## Semantics, errors and limits
 
-- **Load errors.** Check failures, names outside the prefix, malformed
-  `capability()` arguments, runtime errors and limits in the file's top level, and
-  failing modules are `invalid`, with `file:line:col` positions. A denied
-  supersession is `denied`. A cancelled context is `cancelled`. `Replace`'s own
-  errors (for example a duplicate `name@version`) pass through.
+- **Load errors.** A bundle that does not load (a missing or invalid
+  `bundle.yaml`, an invalid prefix, check failures, names outside the prefix,
+  malformed `capability()` arguments, runtime errors and limits in the file's top
+  level, failing modules) is `invalid`. The message lists every diagnostic as
+  `path:line:col: severity: message (code)`, and the `*bundle.LoadError` is in the
+  error chain for its `Diagnostics`. A denied supersession is `denied`, a prefix
+  owned by another file `conflict`. A cancelled context is `cancelled`.
+  `Replace`'s own errors (for example a duplicate `name@version`) pass through.
 - **Errors inside script-defined capabilities surface as `internal`**, with the
   script position and the nested failure in the message: a `ctx.call` that fails
   with `conflict` gives
@@ -393,9 +456,10 @@ l, err := starlarkcap.Load(ctx, r, "apk", starlarkcap.Source{
   is waiting, so `Exec` and script-defined handlers and checks run their
   capability calls under a context bounded by `Limits.Timeout`. A script stuck in
   a call stops at the limit, and the job it was waiting on is cancelled.
-- **Watch** polls; there is no file-system notification. Reads that fail count as
-  absent files.
-- **Script capabilities are not durable.** Each `Load` replaces the prefix's
+- **Watch** polls through `bundle.Live.Run`; there is no file-system
+  notification. Each reload reads and hashes every bundle; only compiling is
+  skipped for unchanged ones.
+- **Script capabilities are not durable.** Each install replaces the prefix's
   handlers; running jobs keep the version they started with.
 
 ## Validation and evidence
@@ -406,13 +470,15 @@ and supersession, subjects, no privilege escalation, failures leaving the
 registry unchanged, step/time limits and checks, raw and dict schemas, names
 outside the prefix, the supersession policy, check before install, shared-module
 digests and `Origin`, positioned module failures, types, print and `ctx`
-attributes, one file per prefix, `capability()` after the load, every-version
-supersession policy, types in the digest, the time limit around `ctx.call`),
+attributes, one file per prefix, dotted prefixes rejected, rollback across files,
+`capability()` after the load, every-version supersession policy, types in the
+digest, the time limit around `ctx.call`),
 `Exec` (body then entry with hooks, positions and codes, host-name clashes,
 cancelling started jobs, reasons, modules and digests, JSON shape, the time limit
 around a blocked call, `Error()` text, `call()` against the snapshot),
-`Check`/`Analyze`/`AnalyzeWith`, `Watch` (lifecycle, retry when a module appears,
-policy and stopping with the context, nested stems rejected, `Close` from
-`OnResult`, reload on a `types.go` change, symbolic links kept inside `Dir`, an
-`fs.FS` root) and `Test` against
-[testdata/scripts](../starlarkcap/testdata/scripts/apk.star).
+`Check`/`Analyze`/`AnalyzeWith`, `Watch` (lifecycle with a failed reload kept
+whole, the first load and recovery, policy, retry and stopping with the context,
+dotted ids rejected, `Close` from `OnResult`, reinstall on a types asset change
+only for the file that declares it, symbolic links refused, an embedded bundle, a
+prefix moving between bundles) and `Test` against the
+[testdata/scripts](../starlarkcap/testdata/scripts/bundle.yaml) bundle.

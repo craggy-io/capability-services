@@ -3,6 +3,7 @@ package starlarkcap_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,8 @@ import (
 	"testing"
 	"testing/fstest"
 	"time"
+
+	"github.com/craggy-io/foundation-kit/bundle"
 
 	"github.com/craggy-io/capability-services/registry"
 	"github.com/craggy-io/capability-services/starlarkcap"
@@ -56,8 +59,30 @@ type result struct {
 }
 
 type recorder struct {
-	mu  sync.Mutex
-	all []result
+	mu     sync.Mutex
+	all    []result
+	errors []error
+}
+
+func (rc *recorder) onError(err error) {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	rc.errors = append(rc.errors, err)
+}
+
+func (rc *recorder) errorCount() int {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	return len(rc.errors)
+}
+
+func (rc *recorder) lastError() error {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	if len(rc.errors) == 0 {
+		return nil
+	}
+	return rc.errors[len(rc.errors)-1]
 }
 
 func (rc *recorder) on(prefix string, l starlarkcap.Loaded, err error) {
@@ -87,6 +112,31 @@ capability(name = "a.tag", input = {"x": schema.string(required = True)},
            run = lambda ctx, i: {"out": tag(i["x"]) + "%s"})
 `
 
+// writeManifest writes dir's bundle.yaml: bundle id, then contributions.
+func writeManifest(t *testing.T, dir, id string, contributions ...string) {
+	t.Helper()
+	writeFile(t, dir, "bundle.yaml", string(manifest(id, contributions...)))
+}
+
+const (
+	contribA     = "{id: a, kind: capability.script@1, path: a.star}"
+	contribATest = "{id: a-test, kind: craggy.script-test@1, path: a_test.star}"
+)
+
+// watchDir watches the bundle in dir every 10ms, recording results and
+// errors.
+func watchDir(t *testing.T, r *registry.Registry, dir string, rec *recorder) *starlarkcap.Watcher {
+	t.Helper()
+	w, err := starlarkcap.Watch(context.Background(), r, starlarkcap.WatchOptions{
+		Sources: []bundle.Source{bundle.Dir(dir)}, Interval: 10 * time.Millisecond, OnResult: rec.on, OnError: rec.onError,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(w.Close)
+	return w
+}
+
 func invokeTag(r *registry.Registry) string {
 	out, err := r.Invoke(context.Background(), "a.tag", json.RawMessage(`{"x":"q"}`))
 	if err != nil {
@@ -100,19 +150,14 @@ func invokeTag(r *registry.Registry) string {
 func TestWatchLifecycle(t *testing.T) {
 	r := baseRegistry(t)
 	dir := t.TempDir()
+	writeManifest(t, dir, "test.watch", contribA, contribATest)
 	writeFile(t, dir, "lib/common.star", sharedModuleV1)
 	writeFile(t, dir, "a.star", strings.Replace(watchedFile, "%s", "", 1))
 	writeFile(t, dir, "a_test.star", "def test_x():\n    pass\n")
 	var rec recorder
-	w, err := starlarkcap.Watch(context.Background(), r, starlarkcap.WatchOptions{
-		Dir: dir, Interval: 10 * time.Millisecond, OnResult: rec.on,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer w.Close()
+	w := watchDir(t, r, dir, &rec)
 
-	// Load: the initial scan is done when Watch returns.
+	// Load: the initial install is done when Watch returns.
 	if got := invokeTag(r); got != "v1:q" {
 		t.Fatalf("initial = %q", got)
 	}
@@ -121,7 +166,7 @@ func TestWatchLifecycle(t *testing.T) {
 		t.Fatalf("initial results = %+v", first)
 	}
 	e, _ := r.Get("a.tag")
-	if e.Origin.Kind != "script" || e.Origin.Ref != "a.star" || e.Origin.Digest != first[0].l.Digest {
+	if e.Origin.Kind != "script" || e.Origin.Ref != "test.watch#a" || e.Origin.Digest != first[0].l.Digest {
 		t.Fatalf("origin = %+v", e.Origin)
 	}
 
@@ -129,11 +174,13 @@ func TestWatchLifecycle(t *testing.T) {
 	writeFile(t, dir, "a.star", strings.Replace(watchedFile, "%s", "/edited", 1))
 	waitFor(t, "edit to load", func() bool { return invokeTag(r) == "v1:q/edited" })
 
-	// Broken edit: reported, previous version stays installed.
+	// Broken edit: the reload fails whole and is reported; the previous
+	// version stays installed.
 	writeFile(t, dir, "a.star", "capability(name = \"a.tag\", run = \n")
-	waitFor(t, "broken edit to be reported", func() bool {
-		return rec.any(func(x result) bool { return x.prefix == "a" && x.err != nil })
-	})
+	waitFor(t, "broken edit to be reported", func() bool { return rec.errorCount() > 0 })
+	if err := rec.lastError(); registry.CodeOf(err) != registry.Invalid || !strings.Contains(err.Error(), "a.star:") {
+		t.Fatalf("reload error = %v, want invalid and positioned", err)
+	}
 	if got := invokeTag(r); got != "v1:q/edited" {
 		t.Fatalf("after broken edit = %q, want the previous version", got)
 	}
@@ -144,7 +191,8 @@ func TestWatchLifecycle(t *testing.T) {
 	writeFile(t, dir, "lib/common.star", strings.Replace(sharedModuleV1, "v1:", "v2:", 1))
 	waitFor(t, "module change to reload", func() bool { return invokeTag(r) == "v2:q/fixed" })
 
-	// Removal unloads the prefix.
+	// Undeclaring the file unloads the prefix.
+	writeManifest(t, dir, "test.watch", contribATest)
 	if err := os.Remove(filepath.Join(dir, "a.star")); err != nil {
 		t.Fatal(err)
 	}
@@ -152,92 +200,86 @@ func TestWatchLifecycle(t *testing.T) {
 	waitFor(t, "removal to be reported", func() bool {
 		return rec.any(func(x result) bool { return x.prefix == "a" && x.err == nil && len(x.l.Capabilities) == 0 })
 	})
-	if rec.any(func(x result) bool { return x.prefix == "a_test" }) {
-		t.Fatal("a _test.star file was loaded as capabilities")
+	if rec.any(func(x result) bool { return x.prefix != "a" }) {
+		t.Fatalf("a test contribution was installed: %+v", rec.snapshot())
 	}
 
-	// Close stops polling.
+	// Close stops reloading.
 	w.Close()
 	n := len(rec.snapshot())
 	writeFile(t, dir, "b.star", `capability(name = "b.x", run = lambda ctx, i: {})`)
+	writeManifest(t, dir, "test.watch", "{id: b, kind: capability.script@1, path: b.star}")
 	time.Sleep(100 * time.Millisecond)
 	if _, ok := r.Get("b.x"); ok || len(rec.snapshot()) != n {
 		t.Fatal("watcher kept loading after Close")
 	}
 }
 
-func TestWatchRetriesFailedFileWhenAModuleAppears(t *testing.T) {
+// The first load must succeed; later, a reload that fails keeps everything
+// and the watcher recovers once the problem is fixed.
+func TestWatchFirstLoadAndRecovery(t *testing.T) {
 	r := baseRegistry(t)
 	dir := t.TempDir()
+	writeManifest(t, dir, "test.watch", contribA)
 	writeFile(t, dir, "a.star", strings.Replace(watchedFile, "%s", "", 1))
+	_, err := starlarkcap.Watch(context.Background(), r, starlarkcap.WatchOptions{Sources: []bundle.Source{bundle.Dir(dir)}})
+	var le *bundle.LoadError
+	if registry.CodeOf(err) != registry.Invalid || !errors.As(err, &le) {
+		t.Fatalf("Watch with a missing module = %v, want invalid with a *bundle.LoadError", err)
+	}
+	if _, ok := r.Get("a.tag"); ok {
+		t.Fatal("a failed first load installed a.tag")
+	}
+
+	writeFile(t, dir, "lib/common.star", sharedModuleV1)
 	var rec recorder
-	w, err := starlarkcap.Watch(context.Background(), r, starlarkcap.WatchOptions{
-		Dir: dir, Interval: 10 * time.Millisecond, OnResult: rec.on,
-	})
-	if err != nil {
+	watchDir(t, r, dir, &rec)
+	if got := invokeTag(r); got != "v1:q" {
+		t.Fatalf("initial = %q", got)
+	}
+	if err := os.Remove(filepath.Join(dir, "lib", "common.star")); err != nil {
 		t.Fatal(err)
 	}
-	defer w.Close()
-	if res := rec.snapshot(); len(res) != 1 || res[0].err == nil {
-		t.Fatalf("missing module should fail the first load: %+v", res)
-	}
-	writeFile(t, dir, "lib/common.star", sharedModuleV1)
-	waitFor(t, "retry after the module appears", func() bool { return invokeTag(r) == "v1:q" })
+	waitFor(t, "missing module to be reported", func() bool { return rec.errorCount() > 0 })
+	writeFile(t, dir, "lib/common.star", strings.Replace(sharedModuleV1, "v1:", "v2:", 1))
+	waitFor(t, "recovery once the module is back", func() bool { return invokeTag(r) == "v2:q" })
 }
 
 func TestWatchAppliesPolicyAndStopsWithContext(t *testing.T) {
 	r := baseRegistry(t)
 	dir := t.TempDir()
+	writeManifest(t, dir, "test.watch", "{id: apk, kind: capability.script@1, path: apk.star}")
 	writeFile(t, dir, "apk.star", `capability(name = "apk.get", supersedes = ["storage.artifact.get"], run = lambda ctx, i: {})`)
 	ctx, cancel := context.WithCancel(context.Background())
 	var rec recorder
-	w, err := starlarkcap.Watch(ctx, r, starlarkcap.WatchOptions{Dir: dir, Interval: 10 * time.Millisecond, OnResult: rec.on})
+	w, err := starlarkcap.Watch(ctx, r, starlarkcap.WatchOptions{Sources: []bundle.Source{bundle.Dir(dir)}, Interval: 10 * time.Millisecond, OnResult: rec.on})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if res := rec.snapshot(); len(res) != 1 || registry.CodeOf(res[0].err) != registry.Denied {
-		t.Fatalf("results = %+v, want one denied load", res)
+		t.Fatalf("results = %+v, want one denied install", res)
 	}
+	// A refused install is retried with the next catalog.
+	writeFile(t, dir, "apk.star", `capability(name = "apk.get", run = lambda ctx, i: {})`)
+	waitFor(t, "the fixed file to install", func() bool { _, ok := r.Get("apk.get"); return ok })
 	cancel()
 	w.Close() // returns once the cancelled watcher has stopped
 
 	if _, err := starlarkcap.Watch(context.Background(), r, starlarkcap.WatchOptions{}); err == nil {
-		t.Fatal("Watch without a root succeeded")
+		t.Fatal("Watch without sources succeeded")
 	}
 }
 
-// One file defines one prefix: a.b.star beside a.star would have its a.b.*
-// capabilities wiped by a.star's Replace("a") and never come back, so Watch
-// rejects a stem containing "." and reports why.
-func TestWatchRejectsNestedPrefixFiles(t *testing.T) {
+// One file defines one prefix: a dotted contribution id would nest inside
+// another file's prefix, so it fails the load.
+func TestWatchRejectsDottedPrefix(t *testing.T) {
 	r := baseRegistry(t)
 	dir := t.TempDir()
-	writeFile(t, dir, "a.star", `capability(name = "a.x", run = lambda ctx, i: {"from": "a.star"})`)
-	writeFile(t, dir, "a.b.star", `capability(name = "a.b.y", run = lambda ctx, i: {"from": "a.b.star"})`)
-	var rec recorder
-	w, err := starlarkcap.Watch(context.Background(), r, starlarkcap.WatchOptions{
-		Dir: dir, Interval: 10 * time.Millisecond, OnResult: rec.on,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer w.Close()
-	time.Sleep(50 * time.Millisecond) // a few more scans
-	if _, ok := r.Get("a.x"); !ok {
-		t.Fatal("a.star was not loaded")
-	}
-	var nested []result
-	for _, x := range rec.snapshot() {
-		if x.prefix == "a.b" {
-			nested = append(nested, x)
-		}
-	}
-	if len(nested) != 1 || registry.CodeOf(nested[0].err) != registry.Invalid ||
-		!strings.Contains(nested[0].err.Error(), "one file defines one top-level prefix") {
-		t.Fatalf("a.b.star results = %+v, want one invalid report about prefixes", nested)
-	}
-	if _, ok := r.Get("a.b.y"); ok {
-		t.Fatal("a.b.star was loaded")
+	writeManifest(t, dir, "test.watch", "{id: a.b, kind: capability.script@1, path: a.b.star}")
+	writeFile(t, dir, "a.b.star", `capability(name = "a.b.y", run = lambda ctx, i: {})`)
+	_, err := starlarkcap.Watch(context.Background(), r, starlarkcap.WatchOptions{Sources: []bundle.Source{bundle.Dir(dir)}})
+	if registry.CodeOf(err) != registry.Invalid || !strings.Contains(err.Error(), string(starlarkcap.CodePrefix)) {
+		t.Fatalf("err = %v, want invalid with %s", err, starlarkcap.CodePrefix)
 	}
 }
 
@@ -246,6 +288,7 @@ func TestWatchRejectsNestedPrefixFiles(t *testing.T) {
 func TestWatcherCloseFromOnResult(t *testing.T) {
 	r := baseRegistry(t)
 	dir := t.TempDir()
+	writeManifest(t, dir, "test.watch")
 	var (
 		mu      sync.Mutex
 		w       *starlarkcap.Watcher
@@ -253,7 +296,7 @@ func TestWatcherCloseFromOnResult(t *testing.T) {
 	)
 	returned := make(chan struct{})
 	w0, err := starlarkcap.Watch(context.Background(), r, starlarkcap.WatchOptions{
-		Dir: dir, Interval: 10 * time.Millisecond,
+		Sources: []bundle.Source{bundle.Dir(dir)}, Interval: 10 * time.Millisecond,
 		OnResult: func(prefix string, l starlarkcap.Loaded, err error) {
 			mu.Lock()
 			self := w
@@ -272,6 +315,7 @@ func TestWatcherCloseFromOnResult(t *testing.T) {
 	w = w0
 	mu.Unlock()
 	writeFile(t, dir, "a.star", `capability(name = "a.x", run = lambda ctx, i: {})`)
+	writeManifest(t, dir, "test.watch", contribA)
 	select {
 	case <-returned:
 	case <-time.After(5 * time.Second):
@@ -288,6 +332,7 @@ func TestWatcherCloseFromOnResult(t *testing.T) {
 	n := results
 	mu.Unlock()
 	writeFile(t, dir, "b.star", `capability(name = "b.x", run = lambda ctx, i: {})`)
+	writeManifest(t, dir, "test.watch", contribA, "{id: b, kind: capability.script@1, path: b.star}")
 	time.Sleep(50 * time.Millisecond)
 	mu.Lock()
 	defer mu.Unlock()
@@ -296,22 +341,20 @@ func TestWatcherCloseFromOnResult(t *testing.T) {
 	}
 }
 
-// The conventional types.go in the root types every file, counts in each
-// file's digest, and reloads every file when it changes.
+// A types asset types the file that declares it, counts in its digest, and
+// reinstalls it when it changes; a file that does not declare it is left
+// alone.
 func TestWatchReloadsOnTypesChange(t *testing.T) {
 	r := baseRegistry(t)
 	dir := t.TempDir()
-	writeFile(t, dir, "types.go", "package caps\n\n// In is the input.\ntype In struct {\n\tX string `json:\"x\"`\n}\n")
+	writeManifest(t, dir, "test.watch",
+		"{id: a, kind: capability.script@1, path: a.star, assets: [assets/types.go]}",
+		"{id: b, kind: capability.script@1, path: b.star}")
+	writeFile(t, dir, "assets/types.go", "package caps\n\n// In is the input.\ntype In struct {\n\tX string `json:\"x\"`\n}\n")
 	writeFile(t, dir, "a.star", `capability(name = "a.t", input = "In", run = lambda ctx, i: {})`)
 	writeFile(t, dir, "b.star", `capability(name = "b.plain", run = lambda ctx, i: {})`)
 	var rec recorder
-	w, err := starlarkcap.Watch(context.Background(), r, starlarkcap.WatchOptions{
-		Dir: dir, Interval: 10 * time.Millisecond, OnResult: rec.on,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer w.Close()
+	watchDir(t, r, dir, &rec)
 	e, ok := r.Get("a.t")
 	if !ok {
 		t.Fatalf("a.star did not load: %+v", rec.snapshot())
@@ -321,15 +364,26 @@ func TestWatchReloadsOnTypesChange(t *testing.T) {
 	}
 	digestA, digestB := e.Origin.Digest, mustGet(t, r, "b.plain").Origin.Digest
 
-	writeFile(t, dir, "types.go", "package caps\n\n// In is the input.\ntype In struct {\n\tX string `json:\"x\"`\n\tY int    `json:\"y\"`\n}\n")
+	writeFile(t, dir, "assets/types.go", "package caps\n\n// In is the input.\ntype In struct {\n\tX string `json:\"x\"`\n\tY int    `json:\"y\"`\n}\n")
 	waitFor(t, "types change to reload a.star", func() bool {
 		e, ok := r.Get("a.t")
 		_, has := e.Capability.Input.Properties["y"]
 		return ok && has
 	})
-	waitFor(t, "types change to reload b.star", func() bool { return mustGet(t, r, "b.plain").Origin.Digest != digestB })
 	if mustGet(t, r, "a.t").Origin.Digest == digestA {
-		t.Fatal("a.star's digest ignores the types file")
+		t.Fatal("a.star's digest ignores its types asset")
+	}
+	if mustGet(t, r, "b.plain").Origin.Digest != digestB {
+		t.Fatal("b.star's digest changed with a types asset it does not declare")
+	}
+	var bInstalls int
+	for _, x := range rec.snapshot() {
+		if x.prefix == "b" {
+			bInstalls++
+		}
+	}
+	if bInstalls != 1 {
+		t.Fatalf("b.star installed %d times, want once: unchanged files are not reinstalled", bInstalls)
 	}
 }
 
@@ -342,14 +396,16 @@ func mustGet(t *testing.T, r *registry.Registry, ref string) registry.Entry {
 	return e
 }
 
-// WatchOptions.Dir reads through an os.Root: neither a capability file nor
-// a module reached by a symbolic link out of the directory loads.
+// bundle.Dir reads through an os.Root and refuses symbolic links: neither a
+// capability file nor a module reached by a link out of the directory
+// loads.
 func TestWatchDirRefusesSymlinkEscape(t *testing.T) {
 	r := baseRegistry(t)
 	base := t.TempDir()
 	dir := filepath.Join(base, "caps")
 	writeFile(t, base, "outside.star", `capability(name = "evil.x", run = lambda ctx, i: {})`)
 	writeFile(t, base, "secret.star", "SECRET = 'leaked'\n")
+	writeManifest(t, dir, "test.watch", contribA, "{id: evil, kind: capability.script@1, path: evil.star}")
 	writeFile(t, dir, "a.star", "load(\"//lib/secret.star\", \"SECRET\")\ncapability(name = \"a.x\", run = lambda ctx, i: {\"s\": SECRET})\n")
 	if err := os.MkdirAll(filepath.Join(dir, "lib"), 0o755); err != nil {
 		t.Fatal(err)
@@ -362,39 +418,64 @@ func TestWatchDirRefusesSymlinkEscape(t *testing.T) {
 			t.Skipf("symlinks unavailable: %v", err)
 		}
 	}
-	var rec recorder
-	w, err := starlarkcap.Watch(context.Background(), r, starlarkcap.WatchOptions{Dir: dir, Interval: 10 * time.Millisecond, OnResult: rec.on})
-	if err != nil {
-		t.Fatal(err)
+	_, err := starlarkcap.Watch(context.Background(), r, starlarkcap.WatchOptions{Sources: []bundle.Source{bundle.Dir(dir)}})
+	if registry.CodeOf(err) != registry.Invalid || !strings.Contains(err.Error(), string(bundle.CodeSymlinkForbidden)) {
+		t.Fatalf("err = %v, want invalid with %s", err, bundle.CodeSymlinkForbidden)
 	}
-	defer w.Close()
 	if _, ok := r.Get("evil.x"); ok {
 		t.Fatal("a capability file outside the directory was loaded through a symlink")
 	}
 	if _, ok := r.Get("a.x"); ok {
 		t.Fatal("a module outside the directory was loaded through a symlink")
 	}
-	if !rec.any(func(x result) bool { return x.prefix == "a" && x.err != nil }) {
-		t.Fatalf("a.star's failure was not reported: %+v", rec.snapshot())
-	}
-	if _, err := starlarkcap.Watch(context.Background(), r, starlarkcap.WatchOptions{Dir: dir, Root: os.DirFS(dir)}); err == nil {
-		t.Fatal("Watch accepted both Dir and Root")
-	}
 }
 
-// WatchOptions.Root takes any fs.FS, such as an embed.FS or a MapFS.
-func TestWatchRootFS(t *testing.T) {
+// bundle.Embedded takes any fs.FS holding a bundle.yaml, such as an
+// embed.FS or a MapFS.
+func TestWatchEmbedded(t *testing.T) {
 	r := baseRegistry(t)
 	fsys := fstest.MapFS{
+		"bundle.yaml":     {Data: manifest("test.watch", contribA)},
 		"lib/common.star": {Data: []byte(sharedModuleV1)},
 		"a.star":          {Data: []byte(strings.Replace(watchedFile, "%s", "", 1))},
 	}
-	w, err := starlarkcap.Watch(context.Background(), r, starlarkcap.WatchOptions{Root: fsys, Interval: time.Hour})
+	w, err := starlarkcap.Watch(context.Background(), r, starlarkcap.WatchOptions{Sources: []bundle.Source{bundle.Embedded("caps", fsys)}, Interval: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer w.Close()
 	if got := invokeTag(r); got != "v1:q" {
 		t.Fatalf("a.tag = %q", got)
+	}
+}
+
+// A prefix may move from one watched bundle to another: the watcher's own
+// earlier install is not a conflict.
+func TestWatchPrefixMovesBetweenBundles(t *testing.T) {
+	r := baseRegistry(t)
+	one, two := t.TempDir(), t.TempDir()
+	writeManifest(t, one, "test.one", contribA)
+	writeFile(t, one, "a.star", `capability(name = "a.x", run = lambda ctx, i: {"from": "one"})`)
+	writeManifest(t, two, "test.two")
+	writeFile(t, two, "a.star", `capability(name = "a.x", run = lambda ctx, i: {"from": "two"})`)
+	var rec recorder
+	w, err := starlarkcap.Watch(context.Background(), r, starlarkcap.WatchOptions{
+		Sources: []bundle.Source{bundle.Dir(one), bundle.Dir(two)}, Interval: 10 * time.Millisecond, OnResult: rec.on, OnError: rec.onError,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	if e := mustGet(t, r, "a.x"); e.Origin.Ref != "test.one#a" {
+		t.Fatalf("origin = %+v", e.Origin)
+	}
+	writeManifest(t, one, "test.one")
+	writeManifest(t, two, "test.two", contribA)
+	waitFor(t, "a to move to test.two", func() bool {
+		e, ok := r.Get("a.x")
+		return ok && e.Origin.Ref == "test.two#a"
+	})
+	if rec.any(func(x result) bool { return registry.CodeOf(x.err) == registry.Conflict }) {
+		t.Fatalf("moving a prefix was a conflict: %+v", rec.snapshot())
 	}
 }

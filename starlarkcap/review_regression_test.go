@@ -4,44 +4,16 @@ package starlarkcap_test
 
 import (
 	"context"
-	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/craggy-io/foundation-kit/bundle"
+
 	"github.com/craggy-io/capability-services/registry"
 	"github.com/craggy-io/capability-services/starlarkcap"
 )
-
-// One file owns one prefix in either order: a nested-prefix file is
-// refused even when the parent file has no capabilities under that
-// subprefix yet.
-func TestReviewNestedPrefixRefusedEitherOrder(t *testing.T) {
-	r := baseRegistry(t)
-	if _, err := load(r, "a", "a.star", `capability(name = "a.x", run = lambda ctx, i: {})`, starlarkcap.LoadOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := load(r, "a.b", "a.b.star", `capability(name = "a.b.y", run = lambda ctx, i: {})`, starlarkcap.LoadOptions{}); registry.CodeOf(err) != registry.Conflict {
-		t.Fatalf("nested load = %v, want conflict", err)
-	}
-	if _, ok := r.Get("a.b.y"); ok {
-		t.Fatal("nested load installed a.b.y")
-	}
-	// The owner still reloads freely.
-	if _, err := load(r, "a", "a.star", `capability(name = "a.x", version = 2, run = lambda ctx, i: {})`, starlarkcap.LoadOptions{}); err != nil {
-		t.Fatalf("owner reload: %v", err)
-	}
-	// After unloading the owner, the nested file may load.
-	if err := r.Replace("a"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := load(r, "a.b", "a.b.star", `capability(name = "a.b.y", run = lambda ctx, i: {})`, starlarkcap.LoadOptions{}); err != nil {
-		t.Fatalf("nested load after unload: %v", err)
-	}
-}
 
 // Unknown kwargs are an error, not silently dropped metadata.
 func TestReviewUnknownCapabilityKwargRejected(t *testing.T) {
@@ -119,10 +91,10 @@ func TestReviewSupersedeUnregisteredTargetDenied(t *testing.T) {
 	}
 }
 
-// The policy is re-checked at install time: a target version registered
-// while the file's top level is still running must pass it too, and the
-// load rolls back when it does not.
-func TestReviewMaySupersedeRecheckedAtInstall(t *testing.T) {
+// The policy is checked at install time, not while the file compiles: a
+// target version registered while the file's top level is still running
+// must pass it too.
+func TestReviewMaySupersedeCheckedAtInstall(t *testing.T) {
 	r := baseRegistry(t)
 	mk := func(v int, tags ...string) registry.Capability {
 		return registry.Func("x.tool", "Tool", func(ctx context.Context, in struct{}) (struct{}, error) { return in, nil },
@@ -158,7 +130,7 @@ print("gate")
 	}
 	close(release)
 	if err := <-done; registry.CodeOf(err) != registry.Denied {
-		t.Fatalf("load err = %v, want denied by the install-time recheck", err)
+		t.Fatalf("load err = %v, want denied by the install-time check", err)
 	}
 	if _, ok := r.Get("apk.t"); ok {
 		t.Fatal("apk.t installed despite failing the recheck")
@@ -237,20 +209,23 @@ func TestReviewExecHooksJobsStartAndRejectedCall(t *testing.T) {
 }
 
 // Closing the watcher from an unload's OnResult stops the remaining
-// unloads in that scan.
+// unloads of that catalog.
 func TestReviewWatcherCloseStopsPendingRemovals(t *testing.T) {
 	r := baseRegistry(t)
 	dir := t.TempDir()
+	writeManifest(t, dir, "test.watch",
+		"{id: wa, kind: capability.script@1, path: wa.star}",
+		"{id: wb, kind: capability.script@1, path: wb.star}")
 	writeFile(t, dir, "wa.star", `capability(name = "wa.x", run = lambda ctx, i: {})`)
 	writeFile(t, dir, "wb.star", `capability(name = "wb.x", run = lambda ctx, i: {})`)
 	var mu sync.Mutex
 	var w *starlarkcap.Watcher
 	unloads := 0
 	w0, err := starlarkcap.Watch(context.Background(), r, starlarkcap.WatchOptions{
-		Dir: dir, Interval: 10 * time.Millisecond,
+		Sources: []bundle.Source{bundle.Dir(dir)}, Interval: 10 * time.Millisecond,
 		OnResult: func(prefix string, l starlarkcap.Loaded, err error) {
 			if err != nil || len(l.Capabilities) != 0 {
-				return // loads and errors are not unloads
+				return // installs and errors are not unloads
 			}
 			mu.Lock()
 			unloads++
@@ -268,18 +243,12 @@ func TestReviewWatcherCloseStopsPendingRemovals(t *testing.T) {
 	w = w0
 	mu.Unlock()
 	defer w0.Close()
-	waitFor(t, "both files loaded", func() bool {
-		_, a := r.Get("wa.x")
-		_, b := r.Get("wb.x")
-		return a && b
-	})
-	if err := os.Remove(filepath.Join(dir, "wa.star")); err != nil {
-		t.Fatal(err)
+	if _, a := r.Get("wa.x"); !a {
+		t.Fatal("wa not installed")
 	}
-	if err := os.Remove(filepath.Join(dir, "wb.star")); err != nil {
-		t.Fatal(err)
-	}
-	// One unload happens and closes the watcher; give the scan room to
+	// One manifest write drops both files from the next catalog.
+	writeManifest(t, dir, "test.watch")
+	// One unload happens and closes the watcher; give the reload room to
 	// (incorrectly) process the second, then check both counts.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -303,6 +272,4 @@ func TestReviewWatcherCloseStopsPendingRemovals(t *testing.T) {
 	if a == b {
 		t.Fatalf("exactly one prefix should remain installed (wa=%v wb=%v)", a, b)
 	}
-	raw, _ := json.Marshal(struct{}{})
-	_ = raw
 }

@@ -329,7 +329,7 @@ registry treats it like any other. A source that owns a group of runtime
 capabilities (a Starlark file, a remote MCP server, a data source set) puts them
 under one prefix. It then calls `Replace(prefix, caps...)` each time it reloads and
 `Replace(prefix)` with nothing when it unloads. That single primitive replaces any
-plugin lifecycle. `starlarkcap.Load` and `starlarkcap.Watch` are built on it
+plugin lifecycle. `starlarkcap.Load`, `Install` and `Watch` are built on it
 ([Starlark guide](starlark.md)).
 
 Snapshots are immutable, so a call that is already running keeps the capability it
@@ -620,11 +620,12 @@ shape catalogues, system panels and documentation generators consume.
 ### 2.10 Provenance
 
 `Capability.Origin` records where a definition came from. Go-registered
-capabilities have none unless the host sets `WithOrigin`. `starlarkcap.Load` sets
-`{Kind: "script", Ref: <filename>, Digest: <content address>}` on every capability
-a file defines, where the digest covers the file, every module it loaded and, when
-the host passes `LoadOptions.TypesDigest`, its type declarations. `Load` also
-reads `Origin` back: it refuses to replace capabilities another file loaded. The
+capabilities have none unless the host sets `WithOrigin`. `starlarkcap` sets
+`{Kind: "script", Ref: <bundle id>#<contribution id>, Digest: <content address>}`
+on every capability a file defines, where the digest covers the file, every module
+it loaded and its type declarations (a types asset, or `LoadOptions.TypesDigest`).
+Installing also reads `Origin` back: it refuses to replace capabilities another
+file installed. The
 registry stores and projects `Origin` (`Descriptor.origin`) and never interprets
 it; audit middleware can record it beside the exact `name@version`.
 
@@ -798,14 +799,19 @@ func Check(v *registry.View, filename string, src []byte, extra ...string) []Dia
 func Analyze(v *registry.View, filename string, src []byte, extra ...string) Analysis
 func AnalyzeWith(v *registry.View, filename string, src []byte, opts CheckOptions) Analysis
 func Env(v *registry.View) check.Env
-func Load(ctx context.Context, r *registry.Registry, prefix string, src Source, opts LoadOptions) (Loaded, error)
+var Script = kind.New[*File]("capability.script", 1, kind.Global()) // a capability file in a bundle
+func Compilers(opts LoadOptions) []bundle.AnyCompiler
+func Load(ctx context.Context, r *registry.Registry, sources []bundle.Source, opts LoadOptions) ([]Loaded, error)
+func Install(ctx context.Context, r *registry.Registry, cat *bundle.Catalog, opts LoadOptions) ([]Loaded, error)
 func Watch(ctx context.Context, r *registry.Registry, opts WatchOptions) (*Watcher, error)
-func Test(t *testing.T, r *registry.Registry, fsys fs.FS)
+func Test(t *testing.T, r *registry.Registry, fsys fs.FS, opts LoadOptions)
 ```
 
 Everything generic (the dialect, value conversion, schemas, limits, `load()`,
-static checks, the test runner) comes from `github.com/craggy-io/script-services`;
-`starlarkcap` adds the registry.
+static checks, the shared `.star` compiler, the test runner) comes from
+`github.com/craggy-io/script-services`, and bundles (manifests, loading,
+reloading) from `github.com/craggy-io/foundation-kit`; `starlarkcap` adds the
+registry.
 
 - `Globals` exposes the capabilities in `ViewFrom(ctx)` to scripts as built-ins.
   Keyword arguments become the input object, and the result comes back as
@@ -832,17 +838,20 @@ static checks, the test runner) comes from `github.com/craggy-io/script-services
   against the view's input schemas, with nearest-name suggestions. `AnalyzeWith`
   also checks `load()` targets. It runs nothing, so an agent can validate a script
   before spending anything on it.
-- `Load` is the other direction: a script **defines** capabilities, with
+- Capability files are the other direction: a script **defines** capabilities, with
   `capability(name, version, title, description, input, output, effects, tags,
   supersedes, accepts, emits, long, heartbeat, run, check)`. The file is checked
   before anything runs; every name must be under the prefix; supersession outside
-  the prefix needs `LoadOptions.MaySupersede`. One file owns one prefix: `Load`
-  refuses (`conflict`) a prefix holding another loaded file's capabilities.
-  Inside `run`, `ctx.progress(...)` calls `registry.Progress`. `Load` calls
-  `Replace(prefix, …)`, and each handler runs its function in a fresh thread with
-  step and time limits, the time limit covering its `ctx.call`s. `Watch` keeps a
-  directory of such files loaded (one prefix per stem, no `.` in a stem, an
-  optional shared `types.go`); `Test` runs their `*_test.star` files.
+  the prefix needs `LoadOptions.MaySupersede`. Files live in bundles: a
+  `bundle.yaml` declares each as a `capability.script@1` contribution whose id is
+  its prefix (no `.`), and nothing is discovered from file names. One file owns
+  one prefix: an install refuses (`conflict`) a prefix holding another file's
+  capabilities. Inside `run`, `ctx.progress(...)` calls `registry.Progress`.
+  `Load` (`bundle.Load` then `Install`) calls `Replace(prefix, …)`, and each
+  handler runs its function in a fresh thread with step and time limits, the time
+  limit covering its `ctx.call`s. `Watch` keeps bundles of such files current
+  through a `bundle.Live`; `Test` runs the `craggy.script-test@1` files they
+  declare.
 - **Starlark-defined capabilities are visible by default.** They go through the
   same filters as Go-defined ones, so a view matching `apk.*` includes
   `apk.decompile` the moment its file loads. That, together with the host's
@@ -984,7 +993,7 @@ jobs/                jobs.* capabilities, Group, WaitOut
 tools/               LLM tool definitions + tool-result encoding (no provider SDK)
 mcp/                 MCP projection, built on tools/ (deps: modelcontextprotocol/go-sdk)
 httpapi/             HTTP projection, SSE job events, OpenAPI (stdlib only)
-starlarkcap/         Globals, Exec, Check, Load, Watch, Test (deps: script-services, go.starlark.net)
+starlarkcap/         Globals, Exec, Check, Script, Load, Install, Watch, Test (deps: script-services, foundation-kit bundle, go.starlark.net)
 conformance/         the suite: one capability set through every projection
 examples/host/       a runnable host wiring fake domains together
 ```
@@ -1033,8 +1042,12 @@ The order the module was built in, and the gate each step had to pass:
   the debug build tag that turns on output validation is `craggy_debug`; the
   conformance package is `conformance`.
 - **Provenance.** `registry.Origin`, `Capability.Origin`, `WithOrigin` and
-  `Descriptor.Origin` record where a definition came from; `starlarkcap.Load` sets
+  `Descriptor.Origin` record where a definition came from; `starlarkcap` sets
   it for script capabilities, with a content digest.
+- **Capability files from bundles.** `starlarkcap.Load` takes bundles
+  (foundation-kit's `bundle.Source`, each with a `bundle.yaml`) instead of one
+  file and a prefix; the prefix is the contribution id, `Watch` is a
+  `bundle.Live`, and `Origin.Ref` is `<bundle id>#<contribution id>`.
 - **Close drains.** `Registry.Close` waits for job runners after cancelling them,
   bounded by `JobDrainTimeout`, so terminal states and journal records are written
   before it returns.
@@ -1066,9 +1079,11 @@ The order the module was built in, and the gate each step had to pass:
 - **Known limits.**
   - Errors inside script-defined capabilities surface as `internal`, with the
     nested capability's code in the message rather than as the call's code.
-  - Under `Watch`, a script file stem claims its whole prefix, including
-    Go-registered capabilities under it (one file still cannot wipe another's:
-    nested stems are rejected and `Load` refuses with `conflict`).
+  - A capability file's prefix (its contribution id) claims the whole prefix,
+    including Go-registered capabilities under it (one file still cannot wipe
+    another's: dotted ids are rejected and an install refuses with `conflict`).
+  - Under `Watch`, one file that fails to load holds back every reload until it
+    is fixed: reloads are whole-catalog (`bundle.Live`).
   - Jobs are not durable beyond the status journal.
 
 ## 9. Deliberately left out (for now)
@@ -1101,7 +1116,7 @@ The order the module was built in, and the gate each step had to pass:
    `LoadOptions.MaySupersede` filter admits the target; the filter sees the
    registered capability, so tag policies such as
    `registry.Not(registry.Tagged("admin"))` work, and `nil` admits nothing. A
-   denied supersession fails the load with `denied` and installs nothing. Under
-   `Watch`, the remaining exposure is a file stem that names a Go namespace, which
-   replaces that whole prefix; hosts reserve script directories for script
+   denied supersession fails the load with `denied` and installs nothing. The
+   remaining exposure is a capability file whose id names a Go namespace, which
+   replaces that whole prefix; hosts reserve script bundles for script
    prefixes.

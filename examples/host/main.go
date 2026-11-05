@@ -7,17 +7,19 @@
 //	go run ./examples/host                  # HTTP on :8080
 //	go run ./examples/host -addr :9000
 //	go run ./examples/host -mcp              # MCP over stdio
-//	go run ./examples/host -scripts ./caps   # also hot-reload ./caps/*.star
+//	go run ./examples/host -scripts ./caps   # also hot-reload the bundle in ./caps
 //
 // The startup listing goes to stdout in HTTP mode and to stderr with -mcp,
 // where stdout carries only the JSON-RPC stream; logs go to stderr.
 //
-// With -scripts, every top-level *.star file in DIR defines the
-// capabilities under its stem (caps/apk.star defines apk.*), modules load
-// from DIR (opened as an os.Root: symbolic links cannot reach outside it),
-// a DIR/types.go declares types for every file, and edits are picked up
-// within a second (see starlarkcap.Watch). A file named apk.star replaces
-// the built-in demo.
+// With -scripts, DIR is a bundle: it must hold a bundle.yaml that declares
+// each capability file as a capability.script@1 contribution whose id is
+// the file's prefix ({id: scan, kind: capability.script@1, path:
+// scan.star} defines scan.*). Modules load from DIR (read through an
+// os.Root; symbolic links are refused), a file may declare a types asset
+// such as assets/types.go, and edits are picked up within a second (see
+// starlarkcap.Watch). The built-in demo owns the apk prefix, so a file
+// with the id apk is refused with a conflict.
 //
 // Try:
 //
@@ -29,11 +31,13 @@ package main
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -44,6 +48,8 @@ import (
 	"time"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/craggy-io/foundation-kit/bundle"
 
 	"github.com/craggy-io/capability-services/httpapi"
 	"github.com/craggy-io/capability-services/jobs"
@@ -80,30 +86,11 @@ func newStore() *store {
 	return s
 }
 
-// The Starlark file loaded at startup. It supersedes the Go-registered
-// legacy jadx capability for every projection, with no extra wiring.
-const apkStar = `
-def _decompile(ctx, input):
-    ctx.progress(stage = "pull-image", done = 1, total = 1, unit = "steps")
-    art = ctx.call("storage.artifact.get", id = input["artifact"])
-    ctx.progress(stage = "decompile", done = 50, total = 100, unit = "files", data = {"tool": "apk.star"})
-    ctx.progress(stage = "decompile", done = 100, total = 100, unit = "files")
-    ctx.progress(stage = "publish-output")
-    ctx.progress(stage = "finalise")
-    return {"artifact": art["name"], "sources": ["Main.java", "Util.java"], "via": "apk.star"}
-
-capability(
-    name = "apk.decompile",
-    title = "Decompile an APK (script)",
-    description = "Decompile an APK to sources and resources in an isolated container",
-    supersedes = ["jadx.decompile"],
-    long = True,
-    effects = ["open_world"],
-    tags = ["agent", "analysis"],
-    input = {"artifact": schema.string(required = True, description = "artifact id")},
-    run = _decompile,
-)
-`
+// demo is the bundle loaded at startup (demo/bundle.yaml): apk.star,
+// declared as the capability file for the prefix apk.
+//
+//go:embed demo
+var demo embed.FS
 
 type getIn struct {
 	ID string `json:"id" jsonschema:"artifact id"`
@@ -185,7 +172,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	flags.SetOutput(stderr)
 	addr := flags.String("addr", ":8080", "HTTP listen address")
 	useMCP := flags.Bool("mcp", false, "serve MCP over stdio instead of HTTP")
-	scripts := flags.String("scripts", "", "directory of capability *.star files to load and hot-reload")
+	scripts := flags.String("scripts", "", "bundle directory (with bundle.yaml) of capability files to load and hot-reload")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -230,20 +217,27 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			log.Printf("%s:%d: %s", pos.File, pos.Line, msg)
 		},
 	}
-	l, err := starlarkcap.Load(context.Background(), r, "apk", starlarkcap.Source{Filename: "apk.star", Src: []byte(apkStar)}, loadOpts)
+	demoFS, err := fs.Sub(demo, "demo")
 	if err != nil {
 		return err
 	}
-	log.Printf("loaded apk.star (%s): %s", l.Digest, strings.Join(l.Capabilities, ", "))
+	loaded, err := starlarkcap.Load(context.Background(), r, []bundle.Source{bundle.Embedded("demo", demoFS)}, loadOpts)
+	if err != nil {
+		return err
+	}
+	for _, l := range loaded {
+		log.Printf("loaded %s (%s): %s", l.Ref, l.Digest, strings.Join(l.Capabilities, ", "))
+	}
 	if *scripts != "" {
 		w, err := starlarkcap.Watch(ctx, r, starlarkcap.WatchOptions{
-			Dir:  *scripts, // opened as an os.Root: no symlink escapes
-			Load: loadOpts,
+			Sources: []bundle.Source{bundle.Dir(*scripts)}, // read through an os.Root: no symlink escapes
+			Load:    loadOpts,
+			OnError: func(err error) { log.Printf("scripts: reload failed, keeping the previous version: %v", err) },
 			OnResult: func(prefix string, l starlarkcap.Loaded, err error) {
 				switch {
 				case err != nil:
 					log.Printf("scripts: %s: %v", prefix, err)
-				case l.Digest == "": // the file was removed
+				case l.Digest == "": // the file left the bundle
 					log.Printf("scripts: %s: unloaded", prefix)
 				default:
 					log.Printf("scripts: %s: loaded %s (%s)", prefix, strings.Join(l.Capabilities, ", "), l.Digest)

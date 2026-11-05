@@ -1,0 +1,7 @@
+# The host example's built-in demo, embedded in the binary.
+apiVersion: craggy.io/bundle/v1
+metadata:
+  id: host.demo
+  version: 1.0.0
+contributions:
+  - {id: apk, kind: capability.script@1, path: apk.star}

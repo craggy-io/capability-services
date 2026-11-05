@@ -7,6 +7,8 @@ import (
 	"go/parser"
 	"go/token"
 	"io"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -91,5 +93,26 @@ func TestHeaderCurlUsesStoredArtifacts(t *testing.T) {
 		if _, ok := s.byID[m[1]]; !ok {
 			t.Fatalf("header curl uses %q, which is not an artifact id", m[1])
 		}
+	}
+}
+
+// -scripts takes a bundle directory: its bundle.yaml declares the capability
+// files, and each is installed under its contribution id.
+func TestScriptsFlagLoadsABundle(t *testing.T) {
+	dir := t.TempDir()
+	for name, text := range map[string]string{
+		"bundle.yaml": "apiVersion: craggy.io/bundle/v1\nmetadata: {id: host.test, version: 1.0.0}\ncontributions:\n  - {id: scan, kind: capability.script@1, path: scan.star}\n",
+		"scan.star":   `capability(name = "scan.hello", run = lambda ctx, i: {"hi": True})` + "\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var stderr syncBuffer
+	if err := run([]string{"-mcp", "-scripts", dir}, strings.NewReader(""), io.Discard, &stderr); err != nil {
+		t.Fatalf("run: %v\n%s", err, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "scripts: scan: loaded scan.hello@1") || !strings.Contains(stderr.String(), "scan.hello@1") {
+		t.Fatalf("scan.star not loaded:\n%s", stderr.String())
 	}
 }

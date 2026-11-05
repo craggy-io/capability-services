@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/craggy-io/foundation-kit/fsx"
 )
 
 // jobRecord is the durable projection of one job. The journal appends the
@@ -203,32 +205,19 @@ func (r *Registry) jobRecordsLocked() []jobRecord {
 }
 
 // writeJobJournalFile replaces the journal at path with exactly records,
-// via a temp file in the same directory and a rename, so a failed or
-// interrupted compaction never truncates the live journal.
+// atomically and durably with fsx.Write, so a failed or interrupted
+// compaction never truncates the live journal.
 func writeJobJournalFile(path string, records []jobRecord) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".job-journal-*")
-	if err != nil {
-		return fmt.Errorf("registry: create compacted job journal: %w", err)
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // no-op once renamed
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return fmt.Errorf("registry: compact job journal: %w", err)
-	}
-	enc := json.NewEncoder(tmp)
-	for _, rec := range records {
-		if err = enc.Encode(rec); err != nil {
-			break
+	err := fsx.Write(path, 0o600, func(w io.Writer) error {
+		enc := json.NewEncoder(w)
+		for _, rec := range records {
+			if err := enc.Encode(rec); err != nil {
+				return err
+			}
 		}
-	}
-	if closeErr := tmp.Close(); err == nil {
-		err = closeErr
-	}
+		return nil
+	})
 	if err != nil {
-		return fmt.Errorf("registry: compact job journal: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
 		return fmt.Errorf("registry: compact job journal: %w", err)
 	}
 	return nil

@@ -32,10 +32,17 @@ func TestArchitecture(t *testing.T) {
 			{
 				// Forbidding every external module covers "any domain module" too.
 				Name:   "rule 1: registry is stdlib plus jsonschema-go",
-				Why:    "core registry imports the standard library and github.com/google/jsonschema-go only, never a projection or domain module (AGENTS.md, Import rules 1)",
+				Why:    "core registry imports the standard library, github.com/google/jsonschema-go and foundation-kit's standard-library-only packages only, never a projection or domain module (AGENTS.md, Import rules 1)",
 				From:   []string{"./registry"},
 				Forbid: []string{archtest.External, "./..."},
-				Allow:  []string{"github.com/google/jsonschema-go/...", "./registry"},
+				Allow: []string{
+					"github.com/google/jsonschema-go/...",
+					// foundation-kit's own layer test holds these to the standard library.
+					"github.com/craggy-io/foundation-kit/fsx",
+					"github.com/craggy-io/foundation-kit/canonjson",
+					"github.com/craggy-io/foundation-kit/retryafter",
+					"./registry",
+				},
 			},
 			noOtherProjection("./jobs"),
 			noOtherProjection("./tools"),

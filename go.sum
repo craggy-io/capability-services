@@ -1,3 +1,5 @@
+github.com/craggy-io/foundation-kit v0.0.0-20261105161744-a4c555eecf83 h1:iutXlTTKVSfaLea8f480M2tPNTcBfpUWX8P6CrHFHA4=
+github.com/craggy-io/foundation-kit v0.0.0-20261105161744-a4c555eecf83/go.mod h1:pxh2BEJDHbIYIGLbmLPCwqkqu42QY5JK5z0BpH9tdzo=
 github.com/craggy-io/script-services v0.1.0 h1:DF7qCCld4QdEKlFcl0xS8GapXIRoW75ioE+BAzMqWi0=
 github.com/craggy-io/script-services v0.1.0/go.mod h1:mdEwkrvplLuH7dR/gm/tZLyTM6V5gZjoY/oiDoAdnHE=
 github.com/golang-jwt/jwt/v5 v5.3.1 h1:kYf81DTWFe7t+1VvL7eS+jKFVWaUnK9cB1qbwn63YCY=

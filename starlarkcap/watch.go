@@ -1,13 +1,10 @@
 package starlarkcap
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"runtime"
 	"slices"
 	"sort"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -56,7 +53,7 @@ type Watcher struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 	ctx    context.Context
-	loopID atomic.Uint64 // goroutine id of the reload loop, for Close
+	inCall atomic.Bool // a callback is running
 
 	mu    sync.Mutex
 	files map[string]*watched // by prefix
@@ -64,20 +61,19 @@ type Watcher struct {
 
 // watched is what the watcher knows about one prefix.
 type watched struct {
-	ref       string // Origin.Ref of the last attempt
-	digest    string // digest of the last attempt
-	ok        bool   // the last attempt installed
-	installed bool   // a version of this prefix is in the registry, from ref or an earlier ref
-	owner     string // Origin.Ref of what is installed
+	ref    string // Origin.Ref of the last attempt
+	digest string // digest of the last attempt
+	ok     bool   // the last attempt installed
+	owner  string // Origin.Ref of what is installed, "" for nothing
 }
 
-// Watch loads opts.Sources into a bundle.Live with Compilers(opts.Load),
+// Watch loads opts.Sources into a bundle.Live, compiled as Load compiles,
 // installs every capability file in the catalog, and keeps them current:
 // the Live reloads every opts.Interval, and each new catalog is applied to
 // the registry.
 //
 // Applying a catalog installs each file whose digest or contribution
-// changed (Install's rules: supersession policy, one file per prefix),
+// changed (Load's rules: supersession policy, one file per prefix),
 // and unloads, with r.Replace(prefix), each prefix whose file left the
 // catalog. A file whose install was refused is retried with every new
 // catalog. A file's prefix claims the whole prefix: a file "jadx"
@@ -101,14 +97,8 @@ func Watch(ctx context.Context, r *registry.Registry, opts WatchOptions) (*Watch
 	if opts.Interval <= 0 {
 		opts.Interval = time.Second
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	sources := slices.Clone(opts.Sources)
-	compilers := Compilers(opts.Load)
-	live, err := bundle.NewLive(ctx, func(context.Context) (bundle.Options, error) {
-		return bundle.Options{Sources: sources, Compilers: compilers}, nil
-	})
+	o := bundle.Options{Sources: slices.Clone(opts.Sources), Compilers: compilers(opts.Load)}
+	live, err := bundle.NewLive(ctx, func(context.Context) (bundle.Options, error) { return o, nil })
 	if err != nil {
 		return nil, loadError(err)
 	}
@@ -120,40 +110,24 @@ func Watch(ctx context.Context, r *registry.Registry, opts WatchOptions) (*Watch
 	return w, nil
 }
 
-// Close stops the watcher and waits for a reload in progress to finish. It
-// may be called from OnResult or OnError: on the watcher's own goroutine
-// it stops the watcher without waiting (the catalog being applied
-// installs and unloads nothing more after the callback returns). Close is
-// idempotent.
+// Close stops the watcher and waits for a reload in progress to finish.
+// Called while an OnResult or OnError callback runs (from the callback
+// itself, typically), it stops the watcher without waiting: the catalog
+// being applied installs and unloads nothing more after the callback
+// returns. Close is idempotent.
 func (w *Watcher) Close() {
 	w.cancel()
-	if id := w.loopID.Load(); id != 0 && id == goroutineID() {
-		return
+	if !w.inCall.Load() {
+		<-w.done
 	}
-	<-w.done
-}
-
-// goroutineID returns the current goroutine's id, parsed from its stack
-// header ("goroutine 42 [running]:"). Close uses it only to recognise the
-// watcher's own goroutine.
-func goroutineID() uint64 {
-	var buf [64]byte
-	b := buf[:runtime.Stack(buf[:], false)]
-	b = bytes.TrimPrefix(b, []byte("goroutine "))
-	if i := bytes.IndexByte(b, ' '); i > 0 {
-		b = b[:i]
-	}
-	id, _ := strconv.ParseUint(string(b), 10, 64)
-	return id
 }
 
 func (w *Watcher) loop(unsubscribe func()) {
-	w.loopID.Store(goroutineID())
 	defer close(w.done)
 	defer unsubscribe()
 	_ = w.live.Run(w.ctx, w.opts.Interval, func(err error) {
 		if w.opts.OnError != nil {
-			w.opts.OnError(loadError(err))
+			w.callback(func() { w.opts.OnError(loadError(err)) })
 		}
 	})
 }
@@ -167,10 +141,10 @@ func (w *Watcher) apply(cat *bundle.Catalog) {
 	present := map[string]bool{}
 	for _, def := range defs {
 		f := def.Value
-		prefix, ref := f.Prefix(), f.ref.String()
+		prefix, ref := f.Prefix(), f.info.Ref
 		present[prefix] = true
 		st := w.files[prefix]
-		if st != nil && st.ok && st.ref == ref && st.digest == f.digest {
+		if st != nil && st.ok && st.ref == ref && st.digest == f.info.Digest {
 			continue
 		}
 		if w.ctx.Err() != nil {
@@ -180,14 +154,10 @@ func (w *Watcher) apply(cat *bundle.Catalog) {
 			st = &watched{}
 			w.files[prefix] = st
 		}
-		replacing := ""
-		if st.installed {
-			replacing = st.owner
-		}
-		l, _, err := install(w.r, f, w.opts.Load.MaySupersede, replacing)
-		st.ref, st.digest, st.ok = ref, f.digest, err == nil
+		l, err := install(w.r, f, w.opts.Load.MaySupersede, st.owner)
+		st.ref, st.digest, st.ok = ref, f.info.Digest, err == nil
 		if err == nil {
-			st.installed, st.owner = true, ref
+			st.owner = ref
 		}
 		w.report(prefix, l, err)
 	}
@@ -205,7 +175,7 @@ func (w *Watcher) apply(cat *bundle.Catalog) {
 		st := w.files[prefix]
 		delete(w.files, prefix)
 		var err error
-		if st.installed {
+		if st.owner != "" {
 			err = w.r.Replace(prefix)
 		}
 		w.report(prefix, Loaded{Prefix: prefix}, err)
@@ -214,6 +184,12 @@ func (w *Watcher) apply(cat *bundle.Catalog) {
 
 func (w *Watcher) report(prefix string, l Loaded, err error) {
 	if w.opts.OnResult != nil {
-		w.opts.OnResult(prefix, l, err)
+		w.callback(func() { w.opts.OnResult(prefix, l, err) })
 	}
+}
+
+func (w *Watcher) callback(fn func()) {
+	w.inCall.Store(true)
+	defer w.inCall.Store(false)
+	fn()
 }

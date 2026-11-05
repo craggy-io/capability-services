@@ -22,7 +22,7 @@
 // jobs.start(ref, **kwargs) returns a job value with .id, .status(),
 // .wait(timeout_seconds = N) and .cancel() for concurrent work.
 //
-// Defining (see Compilers): capability(name = "apk.decompile",
+// Defining (see Script): capability(name = "apk.decompile",
 // description = "...", supersedes = [...], long = True,
 // accepts = [{"type": "android.apk", "level": "validated"}],
 // input = {"artifact": schema.string(required = True)}, run = _impl)

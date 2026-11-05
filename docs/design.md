@@ -329,7 +329,7 @@ registry treats it like any other. A source that owns a group of runtime
 capabilities (a Starlark file, a remote MCP server, a data source set) puts them
 under one prefix. It then calls `Replace(prefix, caps...)` each time it reloads and
 `Replace(prefix)` with nothing when it unloads. That single primitive replaces any
-plugin lifecycle. `starlarkcap.Load`, `Install` and `Watch` are built on it
+plugin lifecycle. `starlarkcap.Load` and `Watch` are built on it
 ([Starlark guide](starlark.md)).
 
 Snapshots are immutable, so a call that is already running keeps the capability it
@@ -800,9 +800,7 @@ func Analyze(v *registry.View, filename string, src []byte, extra ...string) Ana
 func AnalyzeWith(v *registry.View, filename string, src []byte, opts CheckOptions) Analysis
 func Env(v *registry.View) check.Env
 var Script = kind.New[*File]("capability.script", 1, kind.Global()) // a capability file in a bundle
-func Compilers(opts LoadOptions) []bundle.AnyCompiler
 func Load(ctx context.Context, r *registry.Registry, sources []bundle.Source, opts LoadOptions) ([]Loaded, error)
-func Install(ctx context.Context, r *registry.Registry, cat *bundle.Catalog, opts LoadOptions) ([]Loaded, error)
 func Watch(ctx context.Context, r *registry.Registry, opts WatchOptions) (*Watcher, error)
 func Test(t *testing.T, r *registry.Registry, fsys fs.FS, opts LoadOptions)
 ```
@@ -847,7 +845,7 @@ registry.
   its prefix (no `.`), and nothing is discovered from file names. One file owns
   one prefix: an install refuses (`conflict`) a prefix holding another file's
   capabilities. Inside `run`, `ctx.progress(...)` calls `registry.Progress`.
-  `Load` (`bundle.Load` then `Install`) calls `Replace(prefix, …)`, and each
+  `Load` (`bundle.Load`, then an install per file) calls `Replace(prefix, …)`, and each
   handler runs its function in a fresh thread with step and time limits, the time
   limit covering its `ctx.call`s. `Watch` keeps bundles of such files current
   through a `bundle.Live`; `Test` runs the `craggy.script-test@1` files they
@@ -993,7 +991,7 @@ jobs/                jobs.* capabilities, Group, WaitOut
 tools/               LLM tool definitions + tool-result encoding (no provider SDK)
 mcp/                 MCP projection, built on tools/ (deps: modelcontextprotocol/go-sdk)
 httpapi/             HTTP projection, SSE job events, OpenAPI (stdlib only)
-starlarkcap/         Globals, Exec, Check, Script, Load, Install, Watch, Test (deps: script-services, foundation-kit bundle, go.starlark.net)
+starlarkcap/         Globals, Exec, Check, Script, Load, Watch, Test (deps: script-services, foundation-kit bundle, go.starlark.net)
 conformance/         the suite: one capability set through every projection
 examples/host/       a runnable host wiring fake domains together
 ```

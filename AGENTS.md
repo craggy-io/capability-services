@@ -105,9 +105,8 @@ Build in this order:
    `r.AddGroup(...)` their groups, including `jobs.Group()`. `Add` and `Replace` are
    all-or-nothing; handle their errors.
 4. Load script capabilities from bundles with `starlarkcap.Load` or
-   `starlarkcap.Watch` (or `starlarkcap.Compilers` plus `Install` in a catalog of
-   the host's own), with the host's `LoadOptions` (supersession policy, limits,
-   print sink, types).
+   `starlarkcap.Watch`, with the host's `LoadOptions` (supersession policy,
+   limits, print sink, types).
 5. Build views with `r.View(filter)`.
 6. Start projections: `mcp.Serve` (returns `stop`), `httpapi.Handler`, and
    `tools.Defs`/`tools.Do` per agent turn.
@@ -213,11 +212,10 @@ See [jobs](docs/jobs.md).
   is global: two bundles in one catalog defining one prefix is
   `bundle.id_conflict`.
 - `starlarkcap.Load(ctx, r, []bundle.Source, LoadOptions)` runs `bundle.Load`
-  with `Compilers(opts)` and installs every file with `Install`, each with
-  `r.Replace(prefix, ...)`. Reloading is calling `Load` again; unloading is
+  and installs every file, each with `r.Replace(prefix, ...)`. Reloading is calling `Load` again; unloading is
   `r.Replace(prefix)`. A failed load leaves the registry unchanged: a bundle that
   does not load is `invalid` listing every diagnostic (the `*bundle.LoadError` is
-  in the chain), and `Install` rolls back earlier files when a later one is
+  in the chain), and `Load` rolls back earlier files when a later one is
   refused. Compiling (check, then the top level) touches no registry and keeps
   no cache: `bundle.Live` reuses compiled files.
 - One file owns one prefix: an install fails with `conflict`, naming the other

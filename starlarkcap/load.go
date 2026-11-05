@@ -42,6 +42,44 @@ import (
 // be a capability name with no "." (one file defines one top-level
 // prefix). The kind is global, so two bundles in one catalog cannot both
 // define a prefix unless a bundle override makes one replace the other.
+//
+// For each contribution the compiler checks the file statically,
+// then runs its top level once (starcompile.Compiler, with load() served
+// by the contribution's bundle and declared dependencies,
+// modules.FromContribution) and collects what it defines. It touches no
+// registry: supersession policy and prefix ownership are checked at
+// install. Every problem is a bundle diagnostic with a file:line position:
+// a file that fails its check never runs, and a capability() call that is
+// malformed or names a capability outside the prefix fails the file.
+//
+// The file and the modules it loads see `schema` (see schema.Module); the
+// file also sees
+//
+//	capability(name, version=1, title="", description="", input=None,
+//	           output=None, effects=[], tags=[], supersedes=[], accepts=[],
+//	           emits=[], long=False, heartbeat=0, run=<fn>, check=None)
+//
+// input/output accept schema.* values, a field dict, a raw JSON Schema
+// dict, a JSON string, or a declared type's name (LoadOptions.Types, or
+// the contribution's types asset). effects are names ("read_only",
+// "idempotent", "destructive", "open_world"). heartbeat is in seconds.
+// accepts/emits entries are type strings or {"type", "level"} dicts.
+// run(ctx, input) returns a JSON-shaped value; check(ctx) returns
+// None/True for ready, or fails / returns False or a message for not
+// ready. ctx has job_id, caller, progress(stage=, message=, done=, total=,
+// unit=, data=), and call(ref, **kwargs) / start(ref, **kwargs), which go
+// through the *caller's* view.
+//
+// Types asset: a contribution may list one asset whose path ends in ".go"
+// (for example assets/types.go) holding Go-syntax type declarations
+// (types.Parse) for that file alone. Only declared assets count: a
+// types.go the manifest does not list is not read.
+//
+// Digest: a file's digest is its script digest (modules.Digest over its
+// source and each direct load() dependency, as starcompile.Unit.Ref
+// reports; transitive modules count through their parents' digests). With
+// a types digest (the asset's, or LoadOptions.TypesDigest) it is instead a
+// SHA-256 over both (see fileDigest).
 var Script = kind.New[*File]("capability.script", 1, kind.Global())
 
 // Diagnostic codes the Script compiler reports besides starcompile's
@@ -56,42 +94,17 @@ const (
 
 // File is a compiled capability file, the value of a Script contribution:
 // the capabilities its top level defined, not yet installed. It is
-// immutable; Install, Load and Watch install it into a registry.
+// immutable; Load and Watch install it into a registry.
 type File struct {
-	ref         bundle.Ref
-	digest      string
-	modules     []modules.Ref
-	caps        []registry.Capability
-	diagnostics []bundle.Diagnostic
+	info Loaded // what installing it reports
+	caps []registry.Capability
 }
 
 // Prefix is the file's prefix, its contribution id.
-func (f *File) Prefix() string { return f.ref.ID }
+func (f *File) Prefix() string { return f.info.Prefix }
 
-// Ref is the file's contribution, as in Origin.Ref ("owner#id").
-func (f *File) Ref() bundle.Ref { return f.ref }
-
-// Digest is the file's content address; see Loaded.Digest.
-func (f *File) Digest() string { return f.digest }
-
-// Modules are every module the file loaded, transitively, sorted by path.
-func (f *File) Modules() []modules.Ref { return slices.Clone(f.modules) }
-
-// Capabilities are the refs the file defines, in definition order.
-func (f *File) Capabilities() []string {
-	out := make([]string, len(f.caps))
-	for i, c := range f.caps {
-		out[i] = c.Ref()
-	}
-	return out
-}
-
-// Diagnostics are the check warnings the file compiled with.
-func (f *File) Diagnostics() []bundle.Diagnostic { return slices.Clone(f.diagnostics) }
-
-// LoadOptions configure Compilers, Load, Install and Watch. Limits, Print,
-// Types and TypesDigest shape compiling (Compilers); MaySupersede is the
-// install-time policy (Install).
+// LoadOptions configure Load and Watch. Limits, Print, Types and
+// TypesDigest shape compiling; MaySupersede is the install-time policy.
 type LoadOptions struct {
 	// Limits bound the file's top level and each invocation of a
 	// capability (or readiness check) it defines, on a fresh thread per
@@ -103,7 +116,7 @@ type LoadOptions struct {
 	// Types makes Go-syntax type declarations available to every file:
 	// schema.type("Name") and input = "Name" / output = "Name" (see
 	// schema.WithTypes). Without it, a contribution may declare its own
-	// declarations as one asset ending in ".go" (see Compilers); with it,
+	// declarations as one asset ending in ".go" (see Script); with it,
 	// such an asset is an error.
 	Types *types.Package
 	// TypesDigest is the content address of the source Types was parsed
@@ -136,64 +149,21 @@ func (o LoadOptions) limits() script.Limits {
 type Loaded struct {
 	Prefix       string              `json:"prefix"`
 	Ref          string              `json:"ref"`          // the contribution, "owner#id"; Origin.Ref of what it installed
-	Digest       string              `json:"digest"`       // content address of the file, its direct load() deps and its types; see Compilers
+	Digest       string              `json:"digest"`       // content address of the file, its direct load() deps and its types; see Script
 	Modules      []modules.Ref       `json:"modules"`      // every module the file loaded, transitively, sorted by path
 	Capabilities []string            `json:"capabilities"` // refs installed, in definition order
 	Diagnostics  []bundle.Diagnostic `json:"diagnostics,omitempty"`
 }
 
-// Compilers returns the compilers Load and Watch give bundle.Load: the
+// compilers returns the compilers Load and Watch give bundle.Load: the
 // Script compiler, and one that accepts craggy.script-test@1
 // (startest.Test) contributions without checking or running them, so a
-// bundle can hold its capability files' tests beside them for Test. Their
-// values are nil in the resulting catalog. A host that builds its own
-// catalog adds these compilers and installs with Install.
-//
-// For each Script contribution the compiler checks the file statically,
-// then runs its top level once (starcompile.Compiler, with load() served
-// by the contribution's bundle and declared dependencies,
-// modules.FromContribution) and collects what it defines. It touches no
-// registry: supersession policy and prefix ownership are checked by
-// Install. Every problem is a bundle diagnostic with a file:line position:
-// a file that fails its check never runs, and a capability() call that is
-// malformed or names a capability outside the prefix fails the file.
-//
-// The file and the modules it loads see `schema` (see schema.Module); the
-// file also sees
-//
-//	capability(name, version=1, title="", description="", input=None,
-//	           output=None, effects=[], tags=[], supersedes=[], accepts=[],
-//	           emits=[], long=False, heartbeat=0, run=<fn>, check=None)
-//
-// input/output accept schema.* values, a field dict, a raw JSON Schema
-// dict, a JSON string, or a declared type's name (LoadOptions.Types, or
-// the contribution's types asset). effects are names ("read_only",
-// "idempotent", "destructive", "open_world"). heartbeat is in seconds.
-// accepts/emits entries are type strings or {"type", "level"} dicts.
-// run(ctx, input) returns a JSON-shaped value; check(ctx) returns
-// None/True for ready, or fails / returns False or a message for not
-// ready. ctx has job_id, caller, progress(stage=, message=, done=, total=,
-// unit=, data=), and call(ref, **kwargs) / start(ref, **kwargs), which go
-// through the *caller's* view.
-//
-// Types asset: a contribution may list one asset whose path ends in ".go"
-// (for example assets/types.go) holding Go-syntax type declarations
-// (types.Parse) for that file alone. Only declared assets count: a
-// types.go the manifest does not list is not read.
-//
-// Digest: a file's digest is its script digest (modules.Digest over its
-// source and each direct load() dependency, as starcompile.Unit.Ref
-// reports; transitive modules count through their parents' digests). With
-// a types digest (the asset's, or LoadOptions.TypesDigest) it is instead a
-// SHA-256 over both (see fileDigest).
-func Compilers(opts LoadOptions) []bundle.AnyCompiler {
+// bundle can hold its capability files' tests beside them for Test.
+func compilers(opts LoadOptions) []bundle.AnyCompiler {
+	skipTests := func(context.Context, bundle.Contribution) (bundle.Compiled[*starcompile.Unit], []bundle.Diagnostic) {
+		return bundle.Compiled[*starcompile.Unit]{}, nil
+	}
 	return []bundle.AnyCompiler{compiler(opts), bundle.Compile(startest.Test, skipTests)}
-}
-
-// skipTests accepts a test contribution without compiling it: tests run
-// only under Test.
-func skipTests(context.Context, bundle.Contribution) (bundle.Compiled[*starcompile.Unit], []bundle.Diagnostic) {
-	return bundle.Compiled[*starcompile.Unit]{}, nil
 }
 
 // compiler is the Script compiler under opts.
@@ -205,10 +175,9 @@ func compiler(opts LoadOptions) bundle.AnyCompiler {
 		Limits:            lim,
 	}
 	return bundle.Compile(Script, func(ctx context.Context, c bundle.Contribution) (bundle.Compiled[*File], []bundle.Diagnostic) {
-		if !validPrefix(c.Ref.ID) {
+		if !registry.ValidName(c.Ref.ID) || strings.Contains(c.Ref.ID, ".") {
 			return bundle.Compiled[*File]{}, []bundle.Diagnostic{contributionError(c, CodePrefix, c.Path,
-				"capability file id %q must be a capability name without \".\": one file defines one top-level prefix, so define %s.* capabilities in the file whose id is %q",
-				c.Ref.ID, c.Ref.ID, strings.SplitN(c.Ref.ID, ".", 2)[0])}
+				"capability file id %q must be a capability name without \".\": one file defines one top-level prefix", c.Ref.ID)}
 		}
 		u, diags := starcompile.New(ctx, c, sopts)
 		if u == nil {
@@ -218,15 +187,9 @@ func compiler(opts LoadOptions) bundle.AnyCompiler {
 		if f == nil {
 			return bundle.Compiled[*File]{}, append(diags, more...)
 		}
-		f.diagnostics = diags // check warnings: errors stopped New
+		f.info.Diagnostics = diags // check warnings: errors stopped New
 		return bundle.Compiled[*File]{Value: f}, diags
 	})
-}
-
-// validPrefix reports whether id can be a file's prefix: a capability name
-// of one segment.
-func validPrefix(id string) bool {
-	return registry.ValidName(id) && !strings.Contains(id, ".")
 }
 
 func contributionError(c bundle.Contribution, code bundle.Code, path, format string, args ...any) bundle.Diagnostic {
@@ -285,10 +248,12 @@ func compileFile(ctx context.Context, u *starcompile.Unit, opts LoadOptions, lim
 	}
 	digest := fileDigest(u.Ref().Digest, typesDigest)
 	origin := registry.Origin{Kind: originKind, Ref: c.Ref.String(), Digest: digest}
+	refs := make([]string, len(defs))
 	for i := range defs {
 		defs[i].Origin = origin
+		refs[i] = defs[i].Ref()
 	}
-	return &File{ref: c.Ref, digest: digest, modules: ex.Modules, caps: defs}, nil
+	return &File{info: Loaded{Prefix: prefix, Ref: origin.Ref, Digest: digest, Modules: ex.Modules, Capabilities: refs}, caps: defs}, nil
 }
 
 // typesFor returns the schema options and types digest for c: its ".go"
@@ -323,37 +288,24 @@ func typesFor(ctx context.Context, c bundle.Contribution, opts LoadOptions) ([]s
 	return []schema.Option{schema.WithTypes(pkg)}, TypesDigest(src), nil
 }
 
-// Load loads the bundles in sources with bundle.Load and Compilers(opts),
-// then installs every capability file they declare with Install. Reloading
-// is calling Load again; unloading a file is r.Replace(its prefix). A
-// failed load leaves the registry unchanged: a bundle that does not load
+// Load loads the bundles in sources with bundle.Load, then installs every
+// capability file they declare (bundle.All, so override targets are
+// skipped), each with r.Replace(prefix, …), in catalog order. Reloading is
+// calling Load again; unloading a file is r.Replace(its prefix).
+//
+// A failed load leaves the registry unchanged. A bundle that does not load
 // (a missing or invalid bundle.yaml, a file that fails its check or its
 // top level) is registry.Invalid, listing every diagnostic with its
-// position, and the *bundle.LoadError is in the error chain.
-func Load(ctx context.Context, r *registry.Registry, sources []bundle.Source, opts LoadOptions) ([]Loaded, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	cat, err := bundle.Load(ctx, bundle.Options{Sources: sources, Compilers: Compilers(opts)})
-	if err != nil {
-		return nil, loadError(err)
-	}
-	return Install(ctx, r, cat, opts)
-}
-
-// Install installs every capability file in cat (bundle.All(cat, Script),
-// so override targets are skipped), each with r.Replace(prefix, …), in
-// catalog order. It is all or nothing: when one file is refused, the files
-// installed before it are rolled back and the error is returned.
+// position, and the *bundle.LoadError is in the error chain. When one file
+// is refused at install, the files installed before it are rolled back.
 //
 // Every capability a file defines is named under its prefix (the compiler
 // enforces it). It may supersede refs outside the prefix only as
 // opts.MaySupersede allows (else registry.Denied); a bare ref supersedes
 // every version of its target, so every registered version must be
-// admitted. Only MaySupersede is read from opts: the rest applied when cat
-// was compiled.
+// admitted.
 //
-// One file owns one prefix. Install refuses with registry.Conflict, naming
+// One file owns one prefix. Load refuses with registry.Conflict, naming
 // the other file, when r.Replace(prefix) would remove a capability another
 // file installed (its Origin has Kind "script" and a different Ref, the
 // file's contribution "owner#id"). The same contribution reinstalls
@@ -361,78 +313,61 @@ func Load(ctx context.Context, r *registry.Registry, sources []bundle.Source, op
 // a file "apk" replaces every apk.* capability. Unload the other file
 // first (r.Replace(its prefix)) to move a prefix between bundles. The
 // check and the Replace are not one atomic step: serialise concurrent
-// installs of the same prefix (Watch installs one file at a time).
+// loads of the same prefix.
 //
 // Each installed capability's Origin is {Kind: "script", Ref: "owner#id",
 // Digest: Loaded.Digest}.
-func Install(ctx context.Context, r *registry.Registry, cat *bundle.Catalog, opts LoadOptions) ([]Loaded, error) {
+func Load(ctx context.Context, r *registry.Registry, sources []bundle.Source, opts LoadOptions) ([]Loaded, error) {
+	cat, err := bundle.Load(ctx, bundle.Options{Sources: sources, Compilers: compilers(opts)})
+	if err != nil {
+		return nil, loadError(err)
+	}
 	defs := bundle.All(cat, Script)
+	before := r.All()
 	out := make([]Loaded, 0, len(defs))
-	var undo []func()
-	for _, def := range defs {
-		if err := ctx.Err(); err != nil {
-			rollback(undo)
-			return nil, err
-		}
-		l, restore, err := install(r, def.Value, opts.MaySupersede, "")
+	for i, def := range defs {
+		l, err := install(r, def.Value, opts.MaySupersede, "")
 		if err != nil {
-			rollback(undo)
+			for j := i - 1; j >= 0; j-- { // roll back, newest first
+				prefix := defs[j].Value.Prefix()
+				var prev []registry.Capability
+				for _, e := range before {
+					if underPrefix(prefix, e.Name) {
+						prev = append(prev, e.Capability)
+					}
+				}
+				_ = r.Replace(prefix, prev...)
+			}
 			return nil, err
 		}
-		undo = append(undo, restore)
 		out = append(out, l)
 	}
 	return out, nil
 }
 
-func rollback(undo []func()) {
-	for i := len(undo) - 1; i >= 0; i-- {
-		undo[i]()
-	}
-}
-
-// install installs f with r.Replace(prefix, …) and returns how to undo it.
-// replacing is a previous Origin.Ref of the same prefix that f may
-// replace without a conflict (Watch's own earlier install of a prefix that
-// moved between bundles); "" allows none.
-func install(r *registry.Registry, f *File, policy registry.Filter, replacing string) (Loaded, func(), error) {
-	prefix, ref := f.Prefix(), f.ref.String()
-	if err := ownPrefix(r, prefix, ref, replacing); err != nil {
-		return Loaded{}, nil, err
+// install installs f with r.Replace(prefix, …). replacing is a previous
+// Origin.Ref of the same prefix that f may replace without a conflict
+// (Watch's own earlier install of a prefix that moved between bundles); ""
+// allows none.
+func install(r *registry.Registry, f *File, policy registry.Filter, replacing string) (Loaded, error) {
+	prefix := f.Prefix()
+	if err := ownPrefix(r, prefix, f.info.Ref, replacing); err != nil {
+		return Loaded{}, err
 	}
 	all := r.View(registry.All)
 	for _, c := range f.caps {
 		for _, s := range c.Supersedes {
 			if err := maySupersede(all, prefix, c.Name, s, policy); err != nil {
-				return Loaded{}, nil, prefixed("load "+ref+": ", err)
+				return Loaded{}, err
 			}
 		}
 	}
-	// Remember what Replace is about to remove, to undo the install.
-	var prev []registry.Capability
-	for _, e := range r.All() {
-		if underPrefix(prefix, e.Name) {
-			prev = append(prev, e.Capability)
-		}
-	}
 	if err := r.Replace(prefix, slices.Clone(f.caps)...); err != nil {
-		return Loaded{}, nil, prefixed("load "+ref+": ", err)
+		return Loaded{}, err
 	}
-	restore := func() { _ = r.Replace(prefix, prev...) }
-	return Loaded{
-		Prefix: prefix, Ref: ref, Digest: f.digest, Modules: f.Modules(),
-		Capabilities: f.Capabilities(), Diagnostics: f.Diagnostics(),
-	}, restore, nil
-}
-
-// prefixed adds p to a registry error's message, keeping its code and
-// reason.
-func prefixed(p string, err error) error {
-	var re *registry.Error
-	if !errors.As(err, &re) {
-		return &registry.Error{Code: registry.Internal, Message: p + err.Error(), Err: err}
-	}
-	return &registry.Error{Code: re.Code, Reason: re.Reason, Message: p + re.Message, Err: err}
+	l := f.info
+	l.Modules, l.Capabilities, l.Diagnostics = slices.Clone(l.Modules), slices.Clone(l.Capabilities), slices.Clone(l.Diagnostics)
+	return l, nil
 }
 
 // ownPrefix refuses an install of ref under prefix when Replace(prefix)
@@ -449,40 +384,14 @@ func ownPrefix(r *registry.Registry, prefix, ref, replacing string) error {
 	return nil
 }
 
-// loadError maps a failed bundle.Load to a registry error: Invalid with
-// every diagnostic, one per line, as "path:line:col: severity: message
-// (code)". A cancelled load stays a context error (registry.Cancelled).
+// loadError maps a failed bundle.Load to registry.Invalid, whose message
+// is the *bundle.LoadError's list of diagnostics. A cancelled load stays a
+// context error (registry.Cancelled).
 func loadError(err error) error {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}
-	var le *bundle.LoadError
-	if !errors.As(err, &le) {
-		return registry.WrapCode(registry.Invalid, err)
-	}
-	lines := make([]string, len(le.Diagnostics))
-	for i, d := range le.Diagnostics {
-		lines[i] = formatDiagnostic(d)
-	}
-	return &registry.Error{Code: registry.Invalid, Message: "load failed:\n" + strings.Join(lines, "\n"), Err: err}
-}
-
-// formatDiagnostic renders d as "path:line:col: severity: message (code)",
-// the form Load's errors list. The path is the file in its bundle, or the
-// bundle id when the diagnostic has no file; line and column are left out
-// when unknown.
-func formatDiagnostic(d bundle.Diagnostic) string {
-	where := d.Path
-	if where == "" {
-		where = d.Bundle
-	}
-	if d.Line > 0 {
-		where = fmt.Sprintf("%s:%d:%d", where, d.Line, d.Column)
-	}
-	if where != "" {
-		where += ": "
-	}
-	return fmt.Sprintf("%s%s: %s (%s)", where, d.Severity, d.Message, d.Code)
+	return registry.WrapCode(registry.Invalid, err)
 }
 
 // originKind is Origin.Kind for capabilities Load installs.

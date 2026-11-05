@@ -142,8 +142,8 @@ capability(name = "apk.info", run = _infoo)
 	var le *bundle.LoadError
 	fmt.Println(errors.As(err, &le), le.Diagnostics[0].Line)
 	// Output:
-	// invalid: load failed:
-	// apk.star:3:37: error: undefined: _infoo (script.check)
+	// invalid: bundle: load failed with 1 problem(s):
+	//   example.caps:apk.star:3:37: error: undefined: _infoo (script.check)
 	// true 3
 }
 

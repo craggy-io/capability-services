@@ -30,7 +30,7 @@ capability(name = "apkx.sneaky", run = lambda ctx, i: {})
 	if registry.CodeOf(err) != registry.Invalid {
 		t.Fatalf("err = %v, want invalid", err)
 	}
-	if want := "invalid: load failed:\n" + `apk.star:3:11: error: capability apkx.sneaky is outside the prefix "apk" (script.exec)`; err.Error() != want {
+	if want := "invalid: bundle: load failed with 1 problem(s):\n  " + `test.caps:apk.star:3:11: error: capability apkx.sneaky is outside the prefix "apk" (script.exec)`; err.Error() != want {
 		t.Fatalf("err = %v\nwant %s", err, want)
 	}
 	if len(r.All()) != before {

@@ -27,8 +27,8 @@ capabilities (`Globals`, `Exec`, checked statically by `Check`), and scripts
   schemas from `schema.*`, field dicts, raw JSON Schema or declared Go-syntax
   types, readiness checks, and `Origin` with a digest of the file, its modules and
   its types.
-- Loading through foundation-kit's `bundle.Load` (`Load`, or `Compilers` and
-  `Install` for a host's own catalog), hot reload through `bundle.Live` (`Watch`),
+- Loading through foundation-kit's `bundle.Load` (`Load`), hot reload through
+  `bundle.Live` (`Watch`),
   and Starlark tests declared in the same bundle (`Test`).
 
 ## Mental model
@@ -38,7 +38,7 @@ capabilities (`Globals`, `Exec`, checked statically by `Check`), and scripts
  script ───────────────────────────► registry ◄─────────────────────────── capability file
          calls through ViewFrom(ctx)            Replace(prefix, caps...)
 
- bundle.yaml ─► bundle.Load / bundle.Live ─► Compilers (starcompile) ─► *File ─► Install
+ bundle.yaml ─► bundle.Load / bundle.Live ─► Script compiler (starcompile) ─► *File ─► install
 ```
 
 Everything generic comes from script-services: the dialect (Starlark plus
@@ -69,12 +69,9 @@ artifacts and audit records is the host's.
 - `Check(v, filename, src, extra...) []Diagnostic`, `Analyze(...) Analysis`,
   `AnalyzeWith(v, filename, src, CheckOptions{Extra, Modules}) Analysis`,
   `Env(v) check.Env`; `Analysis{Diagnostics, Uses, Loads}`.
-- `Script` (`kind.Kind[*File]`, `capability.script@1`, global); `*File` with
-  `Prefix`, `Ref`, `Digest`, `Modules`, `Capabilities`, `Diagnostics`;
+- `Script` (`kind.Kind[*File]`, `capability.script@1`, global); `*File`;
   `CodePrefix`, `CodeTypes`.
-- `Compilers(LoadOptions) []bundle.AnyCompiler`;
-  `Load(ctx, r, []bundle.Source, LoadOptions) ([]Loaded, error)`;
-  `Install(ctx, r, *bundle.Catalog, LoadOptions) ([]Loaded, error)`;
+- `Load(ctx, r, []bundle.Source, LoadOptions) ([]Loaded, error)`;
   `LoadOptions{Limits, Print, Types, TypesDigest, MaySupersede}`;
   `TypesDigest(src) string`; `Loaded{Prefix, Ref, Digest, Modules, Capabilities,
   Diagnostics}`.
@@ -204,11 +201,8 @@ contributions:
 
 ## Load: defining capabilities
 
-`Load(ctx, r, sources, opts)` runs `bundle.Load` over `sources` with
-`Compilers(opts)` and installs every capability file of the catalog with
-`Install`. A host that builds its own catalog (with other kinds, overrides or a
-`bundle.Live`) adds `Compilers(opts)` to its compilers and calls
-`Install(ctx, r, catalog, opts)`.
+`Load(ctx, r, sources, opts)` runs `bundle.Load` over `sources` and installs
+every capability file of the catalog.
 
 1. **Check.** Each file is analysed with `capability` and `schema` predeclared and
    its `load()` targets looked up in its bundle and declared dependencies. Any
@@ -223,8 +217,8 @@ contributions:
    remove a capability another file installed (see
    [one file per prefix](#load-policy)), it fails with `conflict`; the
    supersession policy is checked against the registry as it stands; then
-   `r.Replace(prefix, defs...)` swaps the prefix atomically. `Load` and `Install`
-   are all or nothing: a failure rolls back the files installed before it, and a
+   `r.Replace(prefix, defs...)` swaps the prefix atomically. `Load` is all
+   or nothing: a failure rolls back the files installed before it, and a
    bundle that fails to load installs nothing.
 
 ```python
@@ -307,7 +301,7 @@ and no `TypesDigest` the digest does not cover the declarations.
 ## Watch: hot reload
 
 `Watch(ctx, r, WatchOptions{Sources: []bundle.Source{bundle.Dir(dir)}, ...})`
-holds the sources in a `bundle.Live` with `Compilers(opts.Load)`, installs every
+holds the sources in a `bundle.Live`, compiled as `Load` compiles, installs every
 capability file of the first catalog before it returns, and applies each new
 catalog to the registry. The Live reloads every `Interval` (default one second)
 with `Run`; a `Subscribe` callback applies the result.
@@ -334,10 +328,10 @@ with `Run`; a `Subscribe` callback applies the result.
   refused install, from the watcher's goroutine (from `Watch` itself for the first
   catalog). `OnError(err)` is called for each failed reload.
 - `Close` (or the context ending) stops reloading; installed capabilities stay
-  installed. `Close` waits for a reload in progress, except when called from
-  `OnResult` or `OnError`: on the watcher's own goroutine it stops the watcher
-  without waiting for itself, and the catalog being applied installs and unloads
-  nothing more.
+  installed. `Close` waits for a reload in progress, except while an `OnResult`
+  or `OnError` callback runs (so a callback may call it): then it stops the
+  watcher without waiting, and the catalog being applied installs and unloads
+  nothing more after the callback returns.
 - `WatchOptions.Load` applies to every file, including its `MaySupersede` policy.
 - **A prefix claims its whole name.** A file `jadx` replaces every `jadx.*`
   capability, Go-registered ones included, and unloading it unloads them all. Use
@@ -391,7 +385,7 @@ def test_input_is_validated():
 [conformance suite](conformance.md) loads its Starlark capability set with `Load`
 from an in-memory bundle and runs the Starlark projection beside the others.
 Hosts combine `Exec` with their own `Predeclared` built-ins and `modules.Loader`,
-and `Load`/`Install`/`Watch` with their supersession policy. Capability files
+and `Load`/`Watch` with their supersession policy. Capability files
 compile through script-services' `starcompile` and load through foundation-kit's
 `bundle`, the same path as every other kind of authored content.
 
@@ -427,8 +421,9 @@ loaded, err := starlarkcap.Load(ctx, r, []bundle.Source{bundle.Dir("caps")},
 - **Load errors.** A bundle that does not load (a missing or invalid
   `bundle.yaml`, an invalid prefix, check failures, names outside the prefix,
   malformed `capability()` arguments, runtime errors and limits in the file's top
-  level, failing modules) is `invalid`. The message lists every diagnostic as
-  `path:line:col: severity: message (code)`, and the `*bundle.LoadError` is in the
+  level, failing modules) is `invalid`. The message is the `*bundle.LoadError`'s, listing
+  every diagnostic as `bundle:path:line:col: severity: message (code)`
+  (`bundle.Diagnostic.String`), and the `*bundle.LoadError` is in the
   error chain for its `Diagnostics`. A denied supersession is `denied`, a prefix
   owned by another file `conflict`. A cancelled context is `cancelled`.
   `Replace`'s own errors (for example a duplicate `name@version`) pass through.

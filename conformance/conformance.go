@@ -253,22 +253,13 @@ capability(
 )
 `
 
-// ScriptManifest is the bundle.yaml LoadScript loads ScriptFile with: the
-// bundle conformance.script declares conformance.star as the capability
-// file for the prefix "star", so installed capabilities have Origin.Ref
-// "conformance.script#star".
-const ScriptManifest = `apiVersion: craggy.io/bundle/v1
-metadata: {id: conformance.script, version: 1.0.0}
-contributions:
-  - {id: star, kind: capability.script@1, path: conformance.star}
-`
-
-// LoadScript installs ScriptFile in r under the "star" prefix, loading it
-// with starlarkcap.Load from an in-memory bundle of ScriptManifest and
-// ScriptFile.
+// LoadScript installs ScriptFile in r under the "star" prefix with
+// starlarkcap.Load, from an in-memory bundle conformance.script, so
+// installed capabilities have Origin.Ref "conformance.script#star".
 func LoadScript(ctx context.Context, r *registry.Registry) (starlarkcap.Loaded, error) {
 	fsys := fstest.MapFS{
-		"bundle.yaml":      {Data: []byte(ScriptManifest)},
+		"bundle.yaml": {Data: []byte("apiVersion: craggy.io/bundle/v1\nmetadata: {id: conformance.script, version: 1.0.0}\n" +
+			"contributions: [{id: star, kind: capability.script@1, path: conformance.star}]\n")},
 		"conformance.star": {Data: []byte(ScriptFile)},
 	}
 	loaded, err := starlarkcap.Load(ctx, r, []bundle.Source{bundle.Embedded("conformance", fsys)}, starlarkcap.LoadOptions{})

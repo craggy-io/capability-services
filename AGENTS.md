@@ -46,7 +46,9 @@ summarises) and the executable package examples (`*/example_test.go`), which
 ## Import rules
 
 1. **Core `registry`: standard library plus `github.com/google/jsonschema-go`
-   only.** It never imports a projection (`jobs`, `tools`, `mcp`, `httpapi`,
+   only**, and foundation-kit's standard-library-only packages (`fsx`,
+   `canonjson`, `retryafter`), which the kit's own layer test keeps that way.
+   It never imports a projection (`jobs`, `tools`, `mcp`, `httpapi`,
    `starlarkcap`) or any domain module.
 2. **Projections import `registry`, never the reverse**, and never each other,
    except `mcp`, which is built on `tools`.

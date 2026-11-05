@@ -40,7 +40,7 @@ summarises) and the executable package examples (`*/example_test.go`), which
 | Offer a view's capabilities to a model you call yourself | [tools](docs/projections.md#tools-in-process-tool-calling-loops) |
 | Serve a view over MCP | [mcp](docs/projections.md#mcp) |
 | Serve a view over HTTP with OpenAPI | [httpapi](docs/projections.md#http) |
-| Let scripts call capabilities, define them, hot-reload or test them | [starlarkcap](docs/starlark.md) |
+| Let scripts call capabilities, define them in bundles, hot-reload or test them | [starlarkcap](docs/starlark.md) |
 | Prove a new projection behaves like the others | [conformance](docs/conformance.md) |
 
 ## Import rules
@@ -53,9 +53,12 @@ summarises) and the executable package examples (`*/example_test.go`), which
 3. **Only `starlarkcap` imports `github.com/craggy-io/script-services`.** No
    other package in this module does, the example host included: it uses the
    aliases `starlarkcap.Position`, `Limits` and `Frame` instead. Hosts
-   elsewhere that use `Source.Modules`, `LoadOptions.Types` or `Program.Modules`
-   import script-services' `modules` and `types` packages themselves; that is the
-   host's choice, not a second bridge.
+   elsewhere that use `Program.Modules`, `CheckOptions.Modules` or
+   `LoadOptions.Types` import script-services' `modules` and `types` packages
+   themselves; that is the host's choice, not a second bridge. Importing
+   foundation-kit's `bundle` (for `bundle.Source`, `bundle.Dir`,
+   `bundle.Embedded`) is not covered by this rule: it is how every package
+   names a bundle.
 4. **Domain cores never import this module.** Only their optional `*cap` adapter
    packages do; an adapter imports its own domain package and `registry`, and
    nothing else from another domain. Do not make changes here that would require a
@@ -72,7 +75,7 @@ nothing unless noted).
 The `./...` forms need `script-services` resolvable (the Go workspace of the
 [README](README.md#development), or a tagged release once one exists); until
 then `go list` errors instead of printing, which is not a pass.
-Import audit 2026-11-04: rules 1-3 hold for every package in this module,
+Import audit 2026-11-05: rules 1-3 hold for every package in this module,
 `examples/host` included; rule 4 is checked in each domain module.
 
 ```sh
@@ -101,8 +104,10 @@ Build in this order:
 3. `r.Add(...)` each adapter's capabilities and `jobs.Capabilities()`;
    `r.AddGroup(...)` their groups, including `jobs.Group()`. `Add` and `Replace` are
    all-or-nothing; handle their errors.
-4. Load script capabilities with `starlarkcap.Load` or `starlarkcap.Watch`, with
-   the host's `LoadOptions` (supersession policy, limits, print sink, types).
+4. Load script capabilities from bundles with `starlarkcap.Load` or
+   `starlarkcap.Watch` (or `starlarkcap.Compilers` plus `Install` in a catalog of
+   the host's own), with the host's `LoadOptions` (supersession policy, limits,
+   print sink, types).
 5. Build views with `r.View(filter)`.
 6. Start projections: `mcp.Serve` (returns `stop`), `httpapi.Handler`, and
    `tools.Defs`/`tools.Do` per agent turn.
@@ -196,41 +201,57 @@ See [jobs](docs/jobs.md).
 
 ## Script loading policy
 
-- `starlarkcap.Load(ctx, r, prefix, Source, LoadOptions)` checks the file, runs
-  it, and installs its capabilities with `r.Replace(prefix, ...)`. Reloading is
-  calling `Load` again; unloading is `r.Replace(prefix)`. A failed load leaves the
-  registry unchanged.
-- One file owns one prefix: `Load` fails with `conflict`, naming the other file,
-  when the `Replace` would remove capabilities another file loaded (`Origin.Kind`
-  `"script"`, a different `Origin.Ref`). Unload that file first to move names
-  between files. Serialise concurrent `Load`s of overlapping prefixes.
+- **Capability files load only from bundles**, through foundation-kit's
+  `bundle.Load` or `bundle.Live` and script-services' shared compiler. A folder
+  must contain a `bundle.yaml` that declares each capability file as a
+  `capability.script@1` contribution (`starlarkcap.Script`); nothing is
+  discovered from file names, and nothing here generates a manifest. Test
+  fixtures carry real `bundle.yaml` bytes too. Do not add a second loader.
+- **The contribution id is the prefix**: `{id: apk, kind: capability.script@1,
+  path: apk.star}` defines `apk.*`. It must be a capability name with no `.`
+  (one file, one top-level prefix), else `capability.script.prefix`. The kind
+  is global: two bundles in one catalog defining one prefix is
+  `bundle.id_conflict`.
+- `starlarkcap.Load(ctx, r, []bundle.Source, LoadOptions)` runs `bundle.Load`
+  with `Compilers(opts)` and installs every file with `Install`, each with
+  `r.Replace(prefix, ...)`. Reloading is calling `Load` again; unloading is
+  `r.Replace(prefix)`. A failed load leaves the registry unchanged: a bundle that
+  does not load is `invalid` listing every diagnostic (the `*bundle.LoadError` is
+  in the chain), and `Install` rolls back earlier files when a later one is
+  refused. Compiling (check, then the top level) touches no registry and keeps
+  no cache: `bundle.Live` reuses compiled files.
+- One file owns one prefix: an install fails with `conflict`, naming the other
+  file, when the `Replace` would remove capabilities another file installed
+  (`Origin.Kind` `"script"`, a different `Origin.Ref`, which is the contribution
+  `owner#id`). Unload that file first to move a prefix between bundles; `Watch`
+  moves its own. Serialise concurrent installs of the same prefix.
 - Every capability a file defines must be named under its prefix (else
   `invalid`). It may supersede refs under the prefix freely and refs outside it
-  only when `LoadOptions.MaySupersede` admits them (else `denied`). The filter sees
-  the registered target capability, so tag policies work
-  (`registry.Not(registry.Tagged("admin"))`); a bare ref supersedes every version,
-  so every registered version must pass. A ref outside the prefix naming nothing
-  registered is denied outright (register the target first), and the policy is
-  re-checked at install time. `nil` admits nothing outside the prefix.
-  Choose the narrowest policy that serves the deployment.
+  only when `LoadOptions.MaySupersede` admits them (else `denied`), checked at
+  install time. The filter sees the registered target capability, so tag
+  policies work (`registry.Not(registry.Tagged("admin"))`); a bare ref supersedes
+  every version, so every registered version must pass. A ref outside the prefix
+  naming nothing registered is denied outright (register the target first).
+  `nil` admits nothing outside the prefix. Choose the narrowest policy that
+  serves the deployment.
 - Script capabilities go through the same view filters as Go ones and call other
   capabilities through the caller's view; a script never widens its caller's
   access.
-- Installed capabilities carry `Origin{Kind: "script", Ref: filename, Digest}`;
+- Installed capabilities carry `Origin{Kind: "script", Ref: "owner#id", Digest}`;
   `Loaded.Digest` and `Loaded.Modules` content-address the file and every module it
-  loaded, and the types when `LoadOptions.TypesDigest` is set (use
-  `starlarkcap.TypesDigest(src)` beside `LoadOptions.Types`). Record them in audit
-  if runs must be reproducible.
-- `Watch` maps each top-level `*.star` file (not `*_test.star`) to the prefix
-  named by its stem. A stem claims its whole prefix: a `jadx.star` replaces every
-  `jadx.*` capability, Go-registered ones included. Point `Watch` at a directory
-  whose stems are reserved for scripts. Stems must be valid capability names and
-  contain no `.` (one file, one prefix; a dotted stem is reported as `invalid`).
-  An optional `types.go` in the root types every file and reloads them all when
-  it changes.
-- Give `Watch` a directory as `WatchOptions.Dir` (opened as an `os.Root`, so
-  symbolic links cannot leave it) or an `fs.FS` as `Root` (an `embed.FS`, or
-  `os.OpenRoot(dir)`'s `FS()`); never `os.DirFS`, which follows links out.
+  loaded, and its types (a declared `.go` asset, or `LoadOptions.TypesDigest`
+  beside `LoadOptions.Types`: use `starlarkcap.TypesDigest(src)`). Record them in
+  audit if runs must be reproducible.
+- `Watch` holds `WatchOptions.Sources` (usually `bundle.Dir(dir)`, read through an
+  `os.Root`; symbolic links are refused) in a `bundle.Live`, polls with `Run`
+  every `Interval`, and applies each new catalog from a `Subscribe` callback:
+  changed files reinstall, files that left the manifest unload. The first load
+  must succeed or `Watch` returns its error; a failed reload keeps the whole
+  previous catalog and goes to `OnError`. A prefix claims its whole name: a file
+  `jadx` replaces every `jadx.*` capability, Go-registered ones included, so use
+  ids reserved for scripts.
+- Test files are `craggy.script-test@1` contributions in the same bundle. `Load`
+  and `Watch` accept them without running them; `starlarkcap.Test` runs them.
 - Limits: each script-defined handler and check runs on a fresh thread under
   `LoadOptions.Limits` (zero means `starlarkcap.DefaultLimits`: 5,000,000 steps,
   10 minutes). `Exec` takes its `Limits` as given: the zero value is unbounded.

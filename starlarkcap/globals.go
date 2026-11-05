@@ -1,12 +1,19 @@
 // Package starlarkcap is the Starlark projection, in both directions:
 // Globals exposes a view's capabilities to scripts as nested built-ins, Exec
 // runs a script against them (Check validates one without running it), and
-// Load lets a script define capabilities; Watch hot-reloads a directory of
-// capability files and Test runs their Starlark tests.
+// capability files define capabilities: Load installs them from bundles,
+// Watch hot-reloads bundles through a bundle.Live, and Test runs their
+// Starlark tests.
+//
+// Capability files are read only from bundles (foundation-kit's bundle
+// package): a folder needs a bundle.yaml that declares each file as a
+// capability.script@1 contribution (Script) whose id is the file's prefix.
+// Nothing is discovered from file names.
 //
 // Everything generic (the dialect, value conversion, schemas, limits,
-// load(), static checks, the test runner) comes from
-// github.com/craggy-io/script-services; this package adds the registry.
+// load(), static checks, the shared .star compiler, the test runner) comes
+// from github.com/craggy-io/script-services; this package adds the
+// registry.
 //
 // Calling: storage.artifact.get(id = "…") — keyword arguments become the
 // input object; results come back as Starlark dicts/lists/scalars.
@@ -15,7 +22,7 @@
 // jobs.start(ref, **kwargs) returns a job value with .id, .status(),
 // .wait(timeout_seconds = N) and .cancel() for concurrent work.
 //
-// Defining (see Load): capability(name = "apk.decompile",
+// Defining (see Compilers): capability(name = "apk.decompile",
 // description = "...", supersedes = [...], long = True,
 // accepts = [{"type": "android.apk", "level": "validated"}],
 // input = {"artifact": schema.string(required = True)}, run = _impl)

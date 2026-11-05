@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	sl "go.starlark.net/starlark"
+
+	"github.com/craggy-io/foundation-kit/bundle"
 
 	"github.com/craggy-io/capability-services/jobs"
 	"github.com/craggy-io/capability-services/registry"
@@ -44,9 +47,36 @@ func baseRegistry(t *testing.T) *registry.Registry {
 	return r
 }
 
-// load is Load of an in-memory file with no modules.
+// manifest is the bundle.yaml of an in-memory test bundle: id, then the
+// contributions' YAML flow mappings, one per line.
+func manifest(id string, contributions ...string) []byte {
+	m := "apiVersion: craggy.io/bundle/v1\nmetadata: {id: " + id + ", version: 1.0.0}\ncontributions:\n"
+	if len(contributions) == 0 {
+		m = strings.TrimSuffix(m, "\n") + " []\n"
+	}
+	for _, c := range contributions {
+		m += "  - " + c + "\n"
+	}
+	return []byte(m)
+}
+
+// load is Load of a bundle "test.caps" holding one capability file, with
+// contribution id prefix at path filename.
 func load(r *registry.Registry, prefix, filename, src string, opts starlarkcap.LoadOptions) (starlarkcap.Loaded, error) {
-	return starlarkcap.Load(context.Background(), r, prefix, starlarkcap.Source{Filename: filename, Src: []byte(src)}, opts)
+	return loadFrom(r, "test.caps", prefix, filename, src, opts)
+}
+
+// loadFrom is load from a bundle with the given id.
+func loadFrom(r *registry.Registry, bundleID, prefix, filename, src string, opts starlarkcap.LoadOptions) (starlarkcap.Loaded, error) {
+	fsys := fstest.MapFS{
+		"bundle.yaml": {Data: manifest(bundleID, "{id: "+prefix+", kind: capability.script@1, path: "+filename+"}")},
+		filename:      {Data: []byte(src)},
+	}
+	ls, err := starlarkcap.Load(context.Background(), r, []bundle.Source{bundle.Embedded(bundleID, fsys)}, opts)
+	if err != nil {
+		return starlarkcap.Loaded{}, err
+	}
+	return ls[0], nil
 }
 
 func runScript(t *testing.T, ctx context.Context, src string) (sl.StringDict, string, error) {

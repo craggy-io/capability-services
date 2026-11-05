@@ -72,7 +72,7 @@ func Suite(t *testing.T) {
 		if err := json.NewDecoder(resp.Body).Decode(&listing); err != nil {
 			t.Fatal(err)
 		}
-		want := registry.Origin{Kind: "script", Ref: "conformance.star", Digest: loaded.Digest}
+		want := registry.Origin{Kind: "script", Ref: "conformance.script#star", Digest: loaded.Digest}
 		seen := 0
 		for _, d := range listing.Capabilities {
 			switch {

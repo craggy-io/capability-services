@@ -3,9 +3,13 @@ package starlarkcap_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
+	"testing/fstest"
+
+	"github.com/craggy-io/foundation-kit/bundle"
 
 	"github.com/craggy-io/script-services/modules"
 	"github.com/craggy-io/script-services/script"
@@ -26,7 +30,7 @@ capability(name = "apkx.sneaky", run = lambda ctx, i: {})
 	if registry.CodeOf(err) != registry.Invalid {
 		t.Fatalf("err = %v, want invalid", err)
 	}
-	if want := `invalid: load apk.star: apk.star:3:11: capability apkx.sneaky is outside the prefix "apk"`; err.Error() != want {
+	if want := "invalid: load failed:\n" + `apk.star:3:11: error: capability apkx.sneaky is outside the prefix "apk" (script.exec)`; err.Error() != want {
 		t.Fatalf("err = %v\nwant %s", err, want)
 	}
 	if len(r.All()) != before {
@@ -107,7 +111,7 @@ capability(name = "apk.typo", run = _rnu)
 	if registry.CodeOf(err) != registry.Invalid {
 		t.Fatalf("err = %v, want invalid", err)
 	}
-	for _, want := range []string{"check failed", "apk.star:4:12: error: undefined: helper", "apk.star:6:37: error: undefined: _rnu"} {
+	for _, want := range []string{"load failed", "apk.star:4:12: error: undefined: helper (script.check)", "apk.star:6:37: error: undefined: _rnu (script.check)"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error lacks %q:\n%v", want, err)
 		}
@@ -141,16 +145,24 @@ capability(name = "b.tag", input = {"x": schema.string(required = True)}, run = 
 `
 	loadBoth := func() (starlarkcap.Loaded, starlarkcap.Loaded) {
 		t.Helper()
-		src := modules.Map(files)
-		la, err := starlarkcap.Load(context.Background(), r, "a", starlarkcap.Source{Filename: "a.star", Src: []byte(a), Modules: src}, starlarkcap.LoadOptions{})
+		fsys := fstest.MapFS{
+			"bundle.yaml": {Data: manifest("test.caps",
+				"{id: a, kind: capability.script@1, path: a.star}",
+				"{id: b, kind: capability.script@1, path: b.star}")},
+			"a.star": {Data: []byte(a)},
+			"b.star": {Data: []byte(b)},
+		}
+		for p, text := range files {
+			fsys[p] = &fstest.MapFile{Data: []byte(text)}
+		}
+		ls, err := starlarkcap.Load(context.Background(), r, []bundle.Source{bundle.Embedded("test", fsys)}, starlarkcap.LoadOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
-		lb, err := starlarkcap.Load(context.Background(), r, "b", starlarkcap.Source{Filename: "b.star", Src: []byte(b), Modules: src}, starlarkcap.LoadOptions{})
-		if err != nil {
-			t.Fatal(err)
+		if len(ls) != 2 || ls[0].Prefix != "a" || ls[1].Prefix != "b" {
+			t.Fatalf("loaded = %+v", ls)
 		}
-		return la, lb
+		return ls[0], ls[1]
 	}
 	la, lb := loadBoth()
 	if len(la.Modules) != 1 || la.Modules[0].Path != "lib/common.star" || len(lb.Modules) != 1 {
@@ -163,7 +175,7 @@ capability(name = "b.tag", input = {"x": schema.string(required = True)}, run = 
 		t.Fatalf("digest a=%s b=%s", la.Digest, lb.Digest)
 	}
 	e, _ := r.Get("a.tag")
-	if e.Origin != (registry.Origin{Kind: "script", Ref: "a.star", Digest: la.Digest}) {
+	if e.Origin != (registry.Origin{Kind: "script", Ref: "test.caps#a", Digest: la.Digest}) || la.Ref != "test.caps#a" {
 		t.Fatalf("origin = %+v", e.Origin)
 	}
 	if d := e.Descriptor(); d.Origin == nil || d.Origin.Digest != la.Digest {
@@ -191,18 +203,26 @@ capability(name = "b.tag", input = {"x": schema.string(required = True)}, run = 
 
 func TestLoadModuleFailureIsPositioned(t *testing.T) {
 	r := baseRegistry(t)
-	src := modules.Map(map[string]string{"lib/bad.star": "def f():\n    return 1\nx = 1 // 0\n"})
-	_, err := starlarkcap.Load(context.Background(), r, "apk", starlarkcap.Source{
-		Filename: "apk.star", Src: []byte(`load("//lib/bad.star", "f")` + "\n"), Modules: src,
-	}, starlarkcap.LoadOptions{})
+	loadMain := func(main string) error {
+		fsys := fstest.MapFS{
+			"bundle.yaml":  {Data: manifest("test.caps", "{id: apk, kind: capability.script@1, path: apk.star}")},
+			"apk.star":     {Data: []byte(main)},
+			"lib/bad.star": {Data: []byte("def f():\n    return 1\nx = 1 // 0\n")},
+		}
+		_, err := starlarkcap.Load(context.Background(), r, []bundle.Source{bundle.Embedded("test", fsys)}, starlarkcap.LoadOptions{})
+		return err
+	}
+	err := loadMain(`load("//lib/bad.star", "f")` + "\n")
 	if registry.CodeOf(err) != registry.Invalid || !strings.Contains(err.Error(), "lib/bad.star:3") {
 		t.Fatalf("err = %v", err)
 	}
+	var le *bundle.LoadError
+	if !errors.As(err, &le) || le.Diagnostics[0].Path != "lib/bad.star" || le.Diagnostics[0].Line != 3 {
+		t.Fatalf("diagnostics = %+v", le)
+	}
 	// A missing module is caught by the check.
-	_, err = starlarkcap.Load(context.Background(), r, "apk", starlarkcap.Source{
-		Filename: "apk.star", Src: []byte(`load("//lib/nope.star", "f")` + "\n"), Modules: src,
-	}, starlarkcap.LoadOptions{})
-	if registry.CodeOf(err) != registry.Invalid || !strings.Contains(err.Error(), "check failed") {
+	err = loadMain(`load("//lib/nope.star", "f")` + "\n")
+	if registry.CodeOf(err) != registry.Invalid || !strings.Contains(err.Error(), "(script.check)") {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -280,37 +300,71 @@ capability(name = "apk.who", run = _who)
 }
 
 // Load refuses a prefix whose Replace would remove capabilities another
-// Load-installed file owns, instead of silently wiping them; the same file
-// reloads freely.
+// file installed, instead of silently wiping them; the same contribution
+// reloads freely. A prefix is one segment, so prefixes never nest.
 func TestLoadRefusesPrefixOwnedByAnotherFile(t *testing.T) {
 	r := baseRegistry(t)
-	if _, err := load(r, "a.b", "a.b.star", `capability(name = "a.b.y", run = lambda ctx, i: {})`, starlarkcap.LoadOptions{}); err != nil {
+	if _, err := loadFrom(r, "one", "a", "a.star", `capability(name = "a.b.y", run = lambda ctx, i: {})`, starlarkcap.LoadOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	_, err := load(r, "a", "a.star", `capability(name = "a.x", run = lambda ctx, i: {})`, starlarkcap.LoadOptions{})
-	if registry.CodeOf(err) != registry.Conflict || !strings.Contains(err.Error(), "a.b.star") || !strings.Contains(err.Error(), "a.b.y@1") {
-		t.Fatalf("err = %v, want a conflict naming a.b.star and a.b.y@1", err)
+	_, err := loadFrom(r, "two", "a", "a.star", `capability(name = "a.x", run = lambda ctx, i: {})`, starlarkcap.LoadOptions{})
+	if registry.CodeOf(err) != registry.Conflict || !strings.Contains(err.Error(), "one#a") || !strings.Contains(err.Error(), "a.b.y@1") {
+		t.Fatalf("err = %v, want a conflict naming one#a and a.b.y@1", err)
 	}
 	if _, ok := r.Get("a.b.y"); !ok {
-		t.Fatal("a.b.star's capability was wiped")
+		t.Fatal("one#a's capability was wiped")
 	}
 	if _, ok := r.Get("a.x"); ok {
 		t.Fatal("refused load installed a.x")
 	}
-	// The other direction: a file whose prefix holds another file's names.
-	r2 := baseRegistry(t)
-	if _, err := load(r2, "a", "a.star", `capability(name = "a.b.y", run = lambda ctx, i: {})`, starlarkcap.LoadOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := load(r2, "a.b", "a.b.star", `capability(name = "a.b.z", run = lambda ctx, i: {})`, starlarkcap.LoadOptions{}); registry.CodeOf(err) != registry.Conflict {
-		t.Fatalf("nested load over a.star's names = %v, want conflict", err)
-	}
 	// Reloading the owner, and replacing Go-registered names, still work.
-	if _, err := load(r2, "a", "a.star", `capability(name = "a.b.y", version = 2, run = lambda ctx, i: {})`, starlarkcap.LoadOptions{}); err != nil {
+	if _, err := loadFrom(r, "one", "a", "a.star", `capability(name = "a.b.y", version = 2, run = lambda ctx, i: {})`, starlarkcap.LoadOptions{}); err != nil {
 		t.Fatalf("reload by the owner: %v", err)
 	}
-	if _, err := load(r2, "storage", "storage.star", `capability(name = "storage.x", run = lambda ctx, i: {})`, starlarkcap.LoadOptions{}); err != nil {
+	if _, err := load(r, "storage", "storage.star", `capability(name = "storage.x", run = lambda ctx, i: {})`, starlarkcap.LoadOptions{}); err != nil {
 		t.Fatalf("replacing Go-registered names: %v", err)
+	}
+	// After unloading the owner, the other bundle may load.
+	if err := r.Replace("a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadFrom(r, "two", "a", "a.star", `capability(name = "a.x", run = lambda ctx, i: {})`, starlarkcap.LoadOptions{}); err != nil {
+		t.Fatalf("load after unload: %v", err)
+	}
+}
+
+// A dotted contribution id would nest one file's prefix inside another's,
+// whose Replace would wipe it: it is rejected at compile time.
+func TestLoadRejectsDottedPrefix(t *testing.T) {
+	r := baseRegistry(t)
+	_, err := load(r, "a.b", "a.b.star", `capability(name = "a.b.y", run = lambda ctx, i: {})`, starlarkcap.LoadOptions{})
+	var le *bundle.LoadError
+	if registry.CodeOf(err) != registry.Invalid || !errors.As(err, &le) || le.Diagnostics[0].Code != starlarkcap.CodePrefix ||
+		!strings.Contains(err.Error(), "one file defines one top-level prefix") {
+		t.Fatalf("err = %v, want invalid with %s", err, starlarkcap.CodePrefix)
+	}
+	if _, ok := r.Get("a.b.y"); ok {
+		t.Fatal("a.b.y installed")
+	}
+}
+
+// Load is all or nothing across files: when one is refused, the files
+// installed before it are rolled back.
+func TestLoadRollsBackEarlierFiles(t *testing.T) {
+	r := baseRegistry(t)
+	fsys := fstest.MapFS{
+		"bundle.yaml": {Data: manifest("test.caps",
+			"{id: a, kind: capability.script@1, path: a.star}",
+			"{id: b, kind: capability.script@1, path: b.star}")},
+		"a.star": {Data: []byte(`capability(name = "a.x", run = lambda ctx, i: {})`)},
+		"b.star": {Data: []byte(`capability(name = "b.x", supersedes = ["vault.secret.read"], run = lambda ctx, i: {})`)},
+	}
+	_, err := starlarkcap.Load(context.Background(), r, []bundle.Source{bundle.Embedded("test", fsys)}, starlarkcap.LoadOptions{})
+	if registry.CodeOf(err) != registry.Denied {
+		t.Fatalf("err = %v, want denied", err)
+	}
+	if _, ok := r.Get("a.x"); ok {
+		t.Fatal("a.x stayed installed after b was refused")
 	}
 }
 

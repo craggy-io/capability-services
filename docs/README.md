@@ -43,10 +43,11 @@ examples, semantics/errors/limits, and validation.
 ## Related module
 
 `starlarkcap` bridges to `github.com/craggy-io/script-services`, the generic
-Starlark runtime (dialect, values, schemas, `types.go` declarations, `load()`
-modules and digests, static checks, the `*_test.star` runner). That module has its
-own README, agent guide and package guides; read them for anything below the
-registry boundary.
+Starlark runtime (dialect, values, schemas, Go-syntax type declarations, `load()`
+modules and digests, static checks, the shared `.star` compiler, the test runner).
+That module has its own README, agent guide and package guides; read them for
+anything below the registry boundary. Capability files load from bundles (a folder with a `bundle.yaml`) through
+`github.com/craggy-io/foundation-kit`'s `bundle` package.
 
 ## Branding
 

@@ -54,8 +54,10 @@ their own repositories.
 - `Capabilities() []registry.Capability` (without the job capabilities)
 - `NewRegistry() (*registry.Registry, error)` (the set plus `jobs.Capabilities()`)
 - `LoadScript(ctx, r) (starlarkcap.Loaded, error)` (installs `ScriptFile` under
-  `star`, as `conformance.star`)
-- `ScriptFile` (the Starlark source), `Items` (the data behind `items.list`)
+  `star` with `starlarkcap.Load`, from an in-memory bundle whose `bundle.yaml` is
+  `ScriptManifest`; `Origin.Ref` is `conformance.script#star`)
+- `ScriptFile` (the Starlark source), `ScriptManifest` (its `bundle.yaml`), `Items`
+  (the data behind `items.list`)
 
 ## Working with other packages
 

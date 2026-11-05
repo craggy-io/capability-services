@@ -1,0 +1,9 @@
+# The apk capability file, the module it shares with its tests, and the
+# tests. lib/names.star is a support file: loaded, not declared.
+apiVersion: craggy.io/bundle/v1
+metadata:
+  id: starlarkcap.testdata
+  version: 0.1.0
+contributions:
+  - {id: apk, kind: capability.script@1, path: apk.star}
+  - {id: apk-test, kind: craggy.script-test@1, path: apk_test.star}

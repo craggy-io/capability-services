@@ -66,7 +66,7 @@ func New(cfg Config) (*Server, error) {
 		cfg.Addr = DefaultAddr
 	}
 	if cfg.Authenticate == nil {
-		loopback, err := isLoopback(cfg.Addr)
+		loopback, err := IsLoopback(cfg.Addr)
 		if err != nil {
 			return nil, fmt.Errorf("server: parse listen address %q: %w", cfg.Addr, err)
 		}
@@ -194,7 +194,8 @@ func writeError(w http.ResponseWriter, status int, code, msg string) {
 	})
 }
 
-func isLoopback(addr string) (bool, error) {
+// IsLoopback reports whether addr (host:port) listens on a loopback interface only.
+func IsLoopback(addr string) (bool, error) {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		return false, err

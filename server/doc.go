@@ -17,6 +17,6 @@
 //		Routes: map[string]http.Handler{"/v1/events": server.Events(hub)}})
 //	_ = l.Serve(ctx, s)                         // blocks until ctx ends
 //
-// Exported names: Config, Server, New, Listener, Listen, Events, DefaultAddr,
+// Exported names: Config, Server, New, Listener, Listen, Events, IsLoopback, DefaultAddr,
 // MCPPath.
 package server

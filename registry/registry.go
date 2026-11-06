@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"reflect"
 	"runtime"
 	"sort"
 	"strconv"
@@ -402,23 +403,67 @@ func dedupeStrings(in []string) []string {
 	return out
 }
 
-// cloneSchema deep-copies a schema through its JSON form (the schema's
-// whole meaning is its JSON document). An unmarshalable schema can only
-// come from hand-built cyclic pointers; fall back to a shallow copy then,
-// rather than aliasing the caller's value outright.
+// cloneSchema deep-copies a schema: every pointer, slice and map it reaches
+// is copied, so the clone shares nothing mutable with s. Pointers already
+// copied are reused, so shared sub-schemas stay shared and a hand-built
+// cyclic schema is copied as the same cycle.
 func cloneSchema(s *jsonschema.Schema) *jsonschema.Schema {
 	if s == nil {
 		return nil
 	}
-	b, err := json.Marshal(s)
-	if err == nil {
-		var out jsonschema.Schema
-		if json.Unmarshal(b, &out) == nil {
-			return &out
+	return deepCopy(reflect.ValueOf(s), map[uintptr]reflect.Value{}).Interface().(*jsonschema.Schema)
+}
+
+// deepCopy copies v recursively; seen maps each copied pointer to its copy.
+func deepCopy(v reflect.Value, seen map[uintptr]reflect.Value) reflect.Value {
+	switch v.Kind() {
+	case reflect.Pointer:
+		if v.IsNil() {
+			return v
 		}
+		if c, ok := seen[v.Pointer()]; ok {
+			return c
+		}
+		c := reflect.New(v.Elem().Type())
+		seen[v.Pointer()] = c
+		c.Elem().Set(deepCopy(v.Elem(), seen))
+		return c
+	case reflect.Struct:
+		c := reflect.New(v.Type()).Elem()
+		c.Set(v)
+		for i := range v.NumField() {
+			if c.Field(i).CanSet() {
+				c.Field(i).Set(deepCopy(v.Field(i), seen))
+			}
+		}
+		return c
+	case reflect.Slice:
+		if v.IsNil() {
+			return v
+		}
+		c := reflect.MakeSlice(v.Type(), v.Len(), v.Len())
+		for i := range v.Len() {
+			c.Index(i).Set(deepCopy(v.Index(i), seen))
+		}
+		return c
+	case reflect.Map:
+		if v.IsNil() {
+			return v
+		}
+		c := reflect.MakeMapWithSize(v.Type(), v.Len())
+		for it := v.MapRange(); it.Next(); {
+			c.SetMapIndex(it.Key(), deepCopy(it.Value(), seen))
+		}
+		return c
+	case reflect.Interface:
+		if v.IsNil() {
+			return v
+		}
+		c := reflect.New(v.Type()).Elem()
+		c.Set(deepCopy(v.Elem(), seen))
+		return c
 	}
-	cp := *s
-	return &cp
+	return v
 }
 
 // cloneCapability returns a copy of c sharing nothing mutable with it:

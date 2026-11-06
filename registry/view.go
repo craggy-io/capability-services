@@ -41,10 +41,11 @@ func (v *View) Intersect(other *View) *View {
 	return &View{reg: v.reg, filter: And(v.filter, other.filter), pin: pin}
 }
 
-func (v *View) entry(s *snapshot, k capKey, rc resolvedCap) Entry {
+// entry describes rc; c is a clone of rc.capab the entry takes ownership of.
+func (v *View) entry(s *snapshot, k capKey, rc resolvedCap, c Capability) Entry {
 	ready, errMsg := v.reg.readyOf(k, rc.capab.Check != nil)
 	return Entry{
-		Capability:   cloneCapability(rc.capab),
+		Capability:   c,
 		Current:      s.current[k.name] == k.version,
 		SupersededBy: append([]string(nil), s.supBy[k]...),
 		Group:        s.groupOf(k.name),
@@ -73,8 +74,11 @@ func (v *View) All() []Entry {
 	s := v.reg.snap.Load()
 	out := make([]Entry, 0, len(s.caps))
 	for k, rc := range s.caps {
-		if v.Allows(rc.capab) {
-			out = append(out, v.entry(s, k, rc))
+		// One clone serves both the filter and the entry: neither can
+		// reach the snapshot through it.
+		c := cloneCapability(rc.capab)
+		if v.filter == nil || v.filter(c) {
+			out = append(out, v.entry(s, k, rc, c))
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -119,7 +123,7 @@ func (v *View) Get(ref string) (Entry, bool) {
 	if !ok {
 		return Entry{}, false
 	}
-	return v.entry(s, k, rc), true
+	return v.entry(s, k, rc, cloneCapability(rc.capab)), true
 }
 
 // Watch fires (coalesced) whenever the registry's List or readiness may

@@ -57,6 +57,13 @@ func TestArchitecture(t *testing.T) {
 				Forbid: []string{"github.com/craggy-io/script-services/..."},
 			},
 			{
+				Name:   "server is assembly above the projections",
+				Why:    "server combines httpapi, mcp and the change feed for hosts; no projection or core package depends on it (AGENTS.md, Import rules 2)",
+				From:   []string{"./..."},
+				Except: []string{"./server", "./examples/host"},
+				Forbid: []string{"./server"},
+			},
+			{
 				// Hosts outside this module can't be named here; the example
 				// host is the one this module holds.
 				Name:   "rule 6: nothing imports the host",

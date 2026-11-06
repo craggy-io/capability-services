@@ -25,6 +25,7 @@ type Descriptor struct {
 	Effects      []string        `json:"effects"`
 	Tags         []string        `json:"tags,omitempty"`
 	Supersedes   []string        `json:"supersedes,omitempty"`
+	Requires     []string        `json:"requires,omitempty"`
 	Accepts      []Subject       `json:"accepts,omitempty"`
 	Emits        []Subject       `json:"emits,omitempty"`
 	Long         bool            `json:"long,omitempty"`
@@ -76,7 +77,8 @@ func (e Entry) Descriptor() Descriptor {
 		Title: e.Title, Description: e.Description, Input: in, Output: out,
 		Examples: examples, Effects: effects,
 		Tags: append([]string(nil), e.Tags...), Supersedes: append([]string(nil), e.Supersedes...),
-		Accepts: append([]Subject(nil), e.Accepts...), Emits: append([]Subject(nil), e.Emits...), Long: e.Long,
+		Requires: append([]string(nil), e.Requires...),
+		Accepts:  append([]Subject(nil), e.Accepts...), Emits: append([]Subject(nil), e.Emits...), Long: e.Long,
 		HeartbeatMs: e.Heartbeat.Milliseconds(), HasCheck: e.Check != nil,
 		Current: e.Current, SupersededBy: append([]string(nil), e.SupersededBy...), Group: e.Group,
 		Ready: e.Ready, CheckError: e.CheckError,

@@ -18,7 +18,10 @@ type resolvedCap struct {
 	capab  Capability
 	inRes  *jsonschema.Resolved
 	outRes *jsonschema.Resolved
+	seq    uint64 // unique per registration: tells a replacement from the original
 }
+
+var registrations atomic.Uint64
 
 // snapshot is immutable after publication. A call already running keeps the
 // capability it started with.
@@ -294,6 +297,11 @@ func normalize(c Capability) (capKey, resolvedCap, error) {
 			return capKey{}, resolvedCap{}, Errorf(Invalid, "%s: invalid supersedes ref %q", c.Name, ref)
 		}
 	}
+	for _, ref := range c.Requires {
+		if _, _, _, ok := ParseRef(ref); !ok {
+			return capKey{}, resolvedCap{}, Errorf(Invalid, "%s: invalid requires ref %q", c.Name, ref)
+		}
+	}
 	accepts, err := normalizeSubjects(c.Name, "accepts", c.Accepts)
 	if err != nil {
 		return capKey{}, resolvedCap{}, err
@@ -307,6 +315,7 @@ func normalize(c Capability) (capKey, resolvedCap, error) {
 	// runJob acquires the tag's semaphore once per occurrence.
 	c.Tags = dedupeStrings(c.Tags)
 	c.Supersedes = dedupeStrings(c.Supersedes)
+	c.Requires = dedupeStrings(c.Requires)
 	c.Accepts = accepts
 	c.Emits = emits
 	// The snapshot is immutable, so it must own its schemas: a caller
@@ -327,7 +336,7 @@ func normalize(c Capability) (capKey, resolvedCap, error) {
 	if c.Examples, err = normalizeExamples(c.Name, c.Examples, inRes); err != nil {
 		return capKey{}, resolvedCap{}, err
 	}
-	return capKey{c.Name, c.Version}, resolvedCap{c, inRes, outRes}, nil
+	return capKey{c.Name, c.Version}, resolvedCap{c, inRes, outRes, registrations.Add(1)}, nil
 }
 
 // buildSnapshot derives versions and supersession from what's registered —
@@ -419,6 +428,7 @@ func cloneSchema(s *jsonschema.Schema) *jsonschema.Schema {
 func cloneCapability(c Capability) Capability {
 	c.Tags = append([]string(nil), c.Tags...)
 	c.Supersedes = append([]string(nil), c.Supersedes...)
+	c.Requires = append([]string(nil), c.Requires...)
 	c.Accepts = append([]Subject(nil), c.Accepts...)
 	c.Emits = append([]Subject(nil), c.Emits...)
 	if c.Examples != nil {
@@ -522,22 +532,46 @@ func (r *Registry) Add(caps ...Capability) error {
 // capabilities unloads the group. This one primitive replaces any plugin
 // lifecycle; a failed validation leaves the registry unchanged.
 func (r *Registry) Replace(prefix string, caps ...Capability) error {
-	if err := validateName(prefix); err != nil {
-		return err
-	}
-	norm := make(map[capKey]resolvedCap, len(caps))
-	for _, c := range caps {
-		k, rc, err := normalize(c)
-		if err != nil {
+	return r.Apply(Change{Prefix: prefix, Caps: caps})
+}
+
+// Change is one prefix replacement in an Apply: every capability under
+// Prefix is removed and Caps, which must all live under Prefix, installed.
+// Empty Caps unloads the prefix.
+type Change struct {
+	Prefix string
+	Caps   []Capability
+}
+
+// Apply makes several prefix replacements as one snapshot swap: either every
+// change takes effect together or, when any capability is invalid, a name
+// is outside its change's prefix, two changes overlap, or the result has a
+// supersession cycle, none does and the registry is unchanged. A concurrent
+// List never sees some changes applied and others not.
+func (r *Registry) Apply(changes ...Change) error {
+	norm := map[capKey]resolvedCap{}
+	for i, ch := range changes {
+		if err := validateName(ch.Prefix); err != nil {
 			return err
 		}
-		if !underPrefix(prefix, k.name) {
-			return Errorf(Invalid, "Replace(%q): capability %s is outside the prefix", prefix, k.name)
+		for _, other := range changes[:i] {
+			if underPrefix(other.Prefix, ch.Prefix) || underPrefix(ch.Prefix, other.Prefix) {
+				return Errorf(Invalid, "Apply: prefixes %q and %q overlap", other.Prefix, ch.Prefix)
+			}
 		}
-		if _, dup := norm[k]; dup {
-			return Errorf(Conflict, "duplicate capability %s in Replace", refOf(k.name, k.version))
+		for _, c := range ch.Caps {
+			k, rc, err := normalize(c)
+			if err != nil {
+				return err
+			}
+			if !underPrefix(ch.Prefix, k.name) {
+				return Errorf(Invalid, "Replace(%q): capability %s is outside the prefix", ch.Prefix, k.name)
+			}
+			if _, dup := norm[k]; dup {
+				return Errorf(Conflict, "duplicate capability %s in Replace", refOf(k.name, k.version))
+			}
+			norm[k] = rc
 		}
-		norm[k] = rc
 	}
 	results := r.runChecksFor(norm) // host code: outside writeMu, as in Add
 	r.writeMu.Lock()
@@ -545,15 +579,24 @@ func (r *Registry) Replace(prefix string, caps ...Capability) error {
 	cur := r.snap.Load()
 	merged := make(map[capKey]resolvedCap, len(cur.caps)+len(norm))
 	for k, v := range cur.caps {
-		if underPrefix(prefix, k.name) {
-			continue
+		if !changed(changes, k.name) {
+			merged[k] = v
 		}
-		merged[k] = v
 	}
 	for k, v := range norm {
 		merged[k] = v
 	}
 	return r.publishLocked(merged, results)
+}
+
+// changed reports whether name falls under any change's prefix.
+func changed(changes []Change, name string) bool {
+	for _, ch := range changes {
+		if underPrefix(ch.Prefix, name) {
+			return true
+		}
+	}
+	return false
 }
 
 // Remove deletes refs: "name" removes all versions, "name@2" one version.

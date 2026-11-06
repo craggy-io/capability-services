@@ -137,9 +137,15 @@ func (v *View) Start(ctx context.Context, ref string, in json.RawMessage) (*Job,
 	ev := v.effective(ctx)
 	k, rc, s, ok := ev.resolve(ref)
 	if !ok {
+		if ev.pin != nil && !ev.pin.declares(ref) {
+			return nil, ReasonErrorf(Denied, ReasonUndeclared, "%s is outside the pinned closure", ref)
+		}
 		return nil, Errorf(NotFound, "capability %q not found", ref)
 	}
-	ready, errMsg := v.reg.readyOf(k, rc.capab.Check != nil)
+	if ev.pin != nil {
+		ev.pin.record(k)
+	}
+	ready, errMsg := ev.readyOf(ctx, k, rc)
 	if !ready {
 		if errMsg == "" {
 			errMsg = "not ready"

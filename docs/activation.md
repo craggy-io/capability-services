@@ -2,9 +2,10 @@
 
 [Project](../README.md) · [Documentation index](README.md) · [Agent guide](../AGENTS.md)
 
-**Status:** planned, 2026-11-06. First consumer: craggy-labs (gate packs, workers and
-recipes installed at run time). Nothing here is implemented yet; each section ends
-with its acceptance tests.
+**Status:** implemented in v0.3.0 (2026-11-06). First consumer: craggy-labs (gate
+packs, workers and recipes installed at run time). Each section ends with its
+acceptance tests and where they live. Differences from the first draft are noted
+inline.
 
 Two guarantees a host needs once bundles that define capabilities can be installed
 while it runs:
@@ -36,27 +37,26 @@ type Change struct {
 }
 func (r *Registry) Apply(changes ...Change) error // all-or-nothing, one snapshot
 
-// starlarkcap: compute changes from a catalog the host owns; never loads on its own.
-type Plan struct {
-	Changes  []registry.Change
-	Identity Identity // catalog digest + each file's Origin
-	Problems []bundle.Diagnostic
-}
-func PlanCatalog(ctx context.Context, r *registry.Registry, cat *bundle.Catalog, opts LoadOptions) Plan
-
-// One activation attempt, recorded by the host.
+// starlarkcap: apply catalogs the host owns; never loads on its own.
+func Compilers(opts LoadOptions) []bundle.AnyCompiler // add to the host's Live
+type Identity struct { Catalog string; Files []FileIdentity } // catalog digest + each file
 type Activation struct {
 	Attempted Identity // what the host tried to make callable
 	Active    Identity // what is callable after the attempt (unchanged on failure)
 	Err       error
 }
-func Activate(ctx context.Context, r *registry.Registry, cat *bundle.Catalog, opts LoadOptions) Activation
+func NewActivator(r *registry.Registry, opts LoadOptions) *Activator
+func (a *Activator) Activate(ctx context.Context, cat *bundle.Catalog) Activation
+func (a *Activator) Active() Identity
 ```
 
 The host subscribes to its own `Live`, calls `Activate` with each new catalog, and
 records both identities (craggy-labs writes them to its change feed and activity
-log). `Watch` becomes a thin loop over `Activate` for hosts that do not own a
-catalog, so there is one application path.
+log). The draft's separate `PlanCatalog` step was folded into the stateful
+`Activator`, which remembers the prefixes it owns so it can unload those that
+leave the catalog. `Watch` keeps its per-file semantics (a refused file is
+retried while the others stay current) for hosts that do not own a catalog;
+hosts that need whole-catalog activation use an `Activator`.
 
 **Restart recovery.** `Live.Install` is not crash-safe, so the host writes an
 intent record (`fsx.WriteFile`) naming the bundle and digest before installing and
@@ -67,12 +67,16 @@ only after this reconciliation.
 
 ### Acceptance tests
 
-- A catalog where one of three files fails to compile changes nothing: the
-  previous callable set still answers and `Active` is unchanged.
+`registry/pin_test.go` (`TestApply*`) and `starlarkcap/activate_test.go`.
+
+- A file that fails to compile fails `bundle.Load`, so the host's `Live` keeps
+  its previous catalog and nothing is activated. A catalog the registry or
+  supersession policy refuses changes nothing: the previous callable set still
+  answers and `Active` is unchanged.
 - A valid catalog swaps every prefix in one snapshot: a concurrent `List` never
   sees a mix.
 - `Attempted` and `Active` differ exactly when activation failed.
-- `Watch` and `Activate` produce identical registries for the same sources.
+- A prefix another capability file owns is refused (`conflict`), whole.
 
 ## 2. Pinned invocation
 
@@ -92,23 +96,31 @@ func (p *Pinned) Calls() []Identity                 // what was actually invoked
 
 - A pinned view resolves each ref to the snapshot entry captured by `Pin`, not the
   current one; the handler stays reachable while the `Pinned` is held, even if
-  the capability is replaced or removed. If it cannot be retained (the registry
-  closed), the call fails `unavailable` with reason `pin_lost`; it never silently
-  switches.
+  the capability is replaced or removed. A closed registry fails every call
+  `unavailable/closed`, so no separate `pin_lost` reason was needed; a pinned
+  call never silently switches.
 - A call outside the pinned closure fails `denied` with reason `undeclared`. Script
   capabilities invoked through a pinned view run with the same pinned view, so
   nested calls are covered by the same closure.
 - Pinning fixes identity, not permission: the pinned view is intersected with the
-  caller's view, and readiness checks still apply.
+  caller's view (outside it is `not_found`, as for any view), and readiness
+  checks still apply: a pinned entry the registry has since replaced runs its
+  own `Check` per call.
+- Script capabilities declare `requires = [...]` in `capability(...)`. A call
+  outside the closure stays `denied/undeclared` when it surfaces through a
+  script handler.
 - Empty `Origin.Digest` is allowed by the registry, but `Identities` reports it so
   a certifying host can refuse it with a diagnostic.
 
 ### Acceptance tests
 
+`registry/pin_test.go` (`TestPin*`) and `starlarkcap/activate_test.go`
+(`TestRequiresPinsNestedScriptCalls`).
+
 - Replace a capability between two calls through one `Pinned`: both calls run the
   original handler; a new `Pin` sees the replacement.
 - A nested script call reaches only its declared `Requires`; an undeclared call
   fails `denied/undeclared`.
-- A pinned call outside the caller's view fails `denied`.
+- A pinned call outside the caller's view fails `not_found`.
 - `Identities` lists the full closure with digests; `Calls` lists only invoked
   entries.

@@ -15,6 +15,7 @@ import (
 type View struct {
 	reg    *Registry
 	filter Filter
+	pin    *Pinned // non-nil: resolve only within the pinned closure
 }
 
 // Registry returns the underlying registry.
@@ -33,7 +34,11 @@ func (v *View) Intersect(other *View) *View {
 	if other == nil || other.reg != v.reg {
 		return v
 	}
-	return &View{reg: v.reg, filter: And(v.filter, other.filter)}
+	pin := v.pin
+	if pin == nil {
+		pin = other.pin
+	}
+	return &View{reg: v.reg, filter: And(v.filter, other.filter), pin: pin}
 }
 
 func (v *View) entry(s *snapshot, k capKey, rc resolvedCap) Entry {
@@ -86,6 +91,9 @@ func (v *View) resolve(ref string) (capKey, resolvedCap, *snapshot, bool) {
 	name, ver, pinned, ok := ParseRef(ref)
 	if !ok {
 		return capKey{}, resolvedCap{}, nil, false
+	}
+	if v.pin != nil {
+		return v.pin.resolve(v, name, ver, pinned)
 	}
 	s := v.reg.snap.Load()
 	if !pinned {

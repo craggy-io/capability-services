@@ -56,8 +56,8 @@ import (
 // file also sees
 //
 //	capability(name, version=1, title="", description="", input=None,
-//	           output=None, effects=[], tags=[], supersedes=[], accepts=[],
-//	           emits=[], long=False, heartbeat=0, run=<fn>, check=None)
+//	           output=None, effects=[], tags=[], supersedes=[], requires=[],
+//	           accepts=[], emits=[], long=False, heartbeat=0, run=<fn>, check=None)
 //
 // input/output accept schema.* values, a field dict, a raw JSON Schema
 // dict, a JSON string, or a declared type's name (LoadOptions.Types, or
@@ -472,7 +472,7 @@ func maySupersede(all *registry.View, prefix, name, ref string, policy registry.
 var capabilityKwargs = map[string]bool{
 	"name": true, "version": true, "title": true, "description": true,
 	"input": true, "output": true, "effects": true, "tags": true,
-	"supersedes": true, "accepts": true, "emits": true, "long": true,
+	"supersedes": true, "requires": true, "accepts": true, "emits": true, "long": true,
 	"heartbeat": true, "run": true, "check": true,
 }
 
@@ -584,6 +584,9 @@ func buildCapability(args sl.Tuple, kwargs []sl.Tuple, lim script.Limits, print 
 		return c, err
 	}
 	if c.Supersedes, err = getStrings("supersedes"); err != nil {
+		return c, err
+	}
+	if c.Requires, err = getStrings("requires"); err != nil {
 		return c, err
 	}
 	if c.Accepts, err = getSubjects(kw, "accepts"); err != nil {
@@ -739,7 +742,30 @@ func handlerError(ctx, tctx context.Context, name string, err error) error {
 	if se != nil && se.Pos.Line > 0 {
 		msg = fmt.Sprintf("%s:%d:%d: %s", se.Pos.File, se.Pos.Line, se.Pos.Col, msg)
 	}
+	// A call outside a pinned closure is the caller's violation, not a
+	// script bug: keep it denied/undeclared however deep it happened.
+	if registry.ReasonOf(innermost(err)) == registry.ReasonUndeclared {
+		return &registry.Error{Code: registry.Denied, Reason: registry.ReasonUndeclared, Message: name + ": " + msg, Err: err}
+	}
 	return &registry.Error{Code: registry.Internal, Message: name + ": " + msg, Err: err}
+}
+
+// innermost is the deepest *registry.Error in err's chain, or err.
+func innermost(err error) error {
+	for {
+		var e *registry.Error
+		if !errors.As(err, &e) || e.Err == nil {
+			if e != nil {
+				return e
+			}
+			return err
+		}
+		var inner *registry.Error
+		if !errors.As(e.Err, &inner) {
+			return e
+		}
+		err = e.Err
+	}
 }
 
 // withTimeLimit derives the context a script's capability calls run under:

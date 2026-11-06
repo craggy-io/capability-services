@@ -27,6 +27,7 @@ type Capability struct {
 	Effects     Effects
 	Tags        []string                        // "agent", "admin", "slow", ...
 	Supersedes  []string                        // refs this replaces: "jadx.decompile" (all versions) or "apktool.decode@1"
+	Requires    []string                        // refs its handler may call; View.Pin pins them with it (see Pinned)
 	Accepts     []Subject                       // content this capability can run on; empty means it is not a content step
 	Emits       []Subject                       // hint about content the output may be; not a result
 	Long        bool                            // projections start it as a job instead of waiting for it

@@ -61,7 +61,7 @@ Registration:
 - `SchemaFor[T]()`, `ParseSchema(raw)`, `EmptyObjectSchema()`.
 - `New(opts...) *Registry`. Options: `Use`, `Limit`, `CheckEvery`, `CheckTimeout`,
   `KeepJobs`, `WithJobAccess`, `ValidateOutput`, `JobDrainTimeout`.
-- `(*Registry).Add`, `Replace`, `Remove`, `AddGroup`, `RefreshChecks`,
+- `(*Registry).Add`, `Replace`, `Apply(changes...)`, `Remove`, `AddGroup`, `RefreshChecks`,
   `OpenJobJournal`, `JobJournalError`, `Close`.
 
 Views and listings:
@@ -183,6 +183,16 @@ _, err = r.Invoke(ctx, "demo.greet", json.RawMessage(`{"nmae":"ada"}`))
   `prefix.` and installs `caps`, each of which must be under the prefix
   (`invalid` otherwise). `Replace(prefix)` unloads. A failed validation changes
   nothing. Groups survive both.
+- **`Apply(changes...)`** is several `Replace`s as one snapshot swap: all take
+  effect or none does; overlapping prefixes are `invalid`. `Replace` is
+  `Apply` with one change.
+- **`Requires` and `View.Pin(refs...)`.** `Pin` resolves refs and, transitively,
+  each capability's `Requires` into a fixed closure (one version per name; a
+  missing requirement is `not_found`). Calls through `Pinned.View()` run the
+  pinned implementations even after `Replace`/`Remove`, nested calls inherit the
+  pin, and a ref outside the closure is `denied` with reason `undeclared`.
+  `Identities()` lists the closure with each `Origin`; `Calls()` the entries
+  actually started. See [activation.md](activation.md).
 - **`Remove`** ignores unknown or malformed refs and never fails.
 - **`Func` panics** on a nil function or a type whose schema cannot be derived
   (recursive types); supply `WithInput`/`WithOutput` for those. `WithExample`

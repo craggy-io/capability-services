@@ -223,7 +223,7 @@ every capability file of the catalog.
 
 ```python
 capability(name, version=1, title="", description="", input=None, output=None,
-           effects=[], tags=[], supersedes=[], accepts=[], emits=[], long=False,
+           effects=[], tags=[], supersedes=[], requires=[], accepts=[], emits=[], long=False,
            heartbeat=0, run=<fn>, check=None)
 ```
 

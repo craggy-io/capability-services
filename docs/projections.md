@@ -142,6 +142,28 @@ func Info(title, version string) Option // OpenAPI info; default "capability-ser
 - The handler serves paths with or without the `/v1` prefix, so it also works
   under `http.StripPrefix("/v1", ...)`.
 
+## Server
+
+`server` assembles the projections for a host process:
+
+```go
+l, _ := server.Listen(addr, log) // binds now, answers 503 + Retry-After until Serve
+s, _ := server.New(server.Config{
+	API: apiView, MCP: agentView, MCPCaller: registry.Caller{ID: "agent:mcp"},
+	Authenticate: hostAuth, // func(*http.Request) (registry.Caller, error)
+	Routes: map[string]http.Handler{"/v1/events": server.Events(hub)},
+})
+err := l.Serve(ctx, s)
+```
+
+- `Authenticate` is the host's policy. Its caller is placed in the request
+  context, so `httpapi` and job access see it; an error is `401` with a
+  `denied` envelope. Without it, `New` refuses any non-loopback address.
+- `Events` serves a `foundation-kit/feed.Hub` as Server-Sent Events: `reset`
+  when the replay is incomplete, `ready` with the current sequence, then
+  `change` events whose `id` is the sequence and `data` the entry JSON.
+- MCP is stateless streamable HTTP at `/mcp`; every call runs as `MCPCaller`.
+
 ## One error envelope
 
 Every projection reports a failure as `registry.ErrorEnvelope`:

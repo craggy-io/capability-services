@@ -17,6 +17,9 @@ summarises) and the executable package examples (`*/example_test.go`), which
 - `jobs/`: the `jobs.*` capabilities over the registry's job table.
 - Projections, each in its own package: `tools/`, `mcp/` (built on `tools`),
   `httpapi/`, `starlarkcap/`.
+- `server/`: assembly of `httpapi`, `mcp` and a `foundation-kit/feed` change
+  feed on one port. Authentication, tokens and caller policy are supplied by the
+  host through `server.Config`; the package owns none of them.
 - `conformance/`: the suite every projection passes; `examples/`: runnable hosts.
 
 ## What does not belong here
@@ -40,6 +43,7 @@ summarises) and the executable package examples (`*/example_test.go`), which
 | Offer a view's capabilities to a model you call yourself | [tools](docs/projections.md#tools-in-process-tool-calling-loops) |
 | Serve a view over MCP | [mcp](docs/projections.md#mcp) |
 | Serve a view over HTTP with OpenAPI | [httpapi](docs/projections.md#http) |
+| Serve HTTP, MCP and a change feed on one authenticated port | [server](docs/projections.md#server) |
 | Let scripts call capabilities, define them in bundles, hot-reload or test them | [starlarkcap](docs/starlark.md) |
 | Prove a new projection behaves like the others | [conformance](docs/conformance.md) |
 

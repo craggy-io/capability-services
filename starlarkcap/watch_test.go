@@ -479,3 +479,43 @@ func TestWatchPrefixMovesBetweenBundles(t *testing.T) {
 		t.Fatalf("moving a prefix was a conflict: %+v", rec.snapshot())
 	}
 }
+
+// Bundles added to and removed from a root install and unload their files
+// without restarting the watcher; a missing root is refused.
+func TestWatchRoots(t *testing.T) {
+	r := baseRegistry(t)
+	if _, err := starlarkcap.Watch(context.Background(), r, starlarkcap.WatchOptions{Roots: []string{filepath.Join(t.TempDir(), "missing")}}); err == nil {
+		t.Fatal("missing root accepted")
+	}
+	root := t.TempDir()
+	add := func(name string) {
+		t.Helper()
+		dir := filepath.Join(root, name)
+		writeManifest(t, dir, "test."+name, "{id: "+name+", kind: capability.script@1, path: "+name+".star}")
+		writeFile(t, dir, name+".star", `capability(name = "`+name+`.x", run = lambda ctx, i: {"from": "`+name+`"})`)
+	}
+	add("one")
+	writeFile(t, filepath.Join(root, "not-a-bundle"), "readme.txt", "no bundle.yaml: skipped")
+	var rec recorder
+	w, err := starlarkcap.Watch(context.Background(), r, starlarkcap.WatchOptions{
+		Roots: []string{root}, Interval: 10 * time.Millisecond, OnResult: rec.on, OnError: rec.onError,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(w.Close)
+	if _, ok := r.Get("one.x"); !ok {
+		t.Fatal("one.x not installed at Watch")
+	}
+	add("two")
+	waitFor(t, "added bundle to install", func() bool { _, ok := r.Get("two.x"); return ok })
+	// On Windows a reload in progress holds the folder open: retry.
+	waitFor(t, "bundle folder to be removed", func() bool { return os.RemoveAll(filepath.Join(root, "one")) == nil })
+	waitFor(t, "removed bundle to unload", func() bool { _, ok := r.Get("one.x"); return !ok })
+	if _, ok := r.Get("two.x"); !ok {
+		t.Fatal("two.x unloaded with one")
+	}
+	if n := rec.errorCount(); n != 0 {
+		t.Fatalf("%d reload errors: %v", n, rec.lastError())
+	}
+}

@@ -3,6 +3,8 @@ package starlarkcap
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"slices"
 	"sort"
 	"sync"
@@ -20,8 +22,14 @@ type WatchOptions struct {
 	// bundle.Dir(dir), which reads through an os.Root and rejects
 	// symbolic links, or bundle.Embedded for an fs.FS. Bundles that only
 	// serve modules to the others (declared dependencies) go here too.
-	// Required.
+	// Sources or Roots is required.
 	Sources []bundle.Source
+	// Roots are folders of bundles: every child folder with a bundle.yaml
+	// is a bundle (bundle.Children). They are listed again on every
+	// reload, so a bundle added to or removed from a root installs or
+	// unloads its files like an edit does. Each root must exist when
+	// Watch is called.
+	Roots []string
 	// Interval is how often the bundles are reloaded (bundle.Live.Run).
 	// Defaults to one second.
 	Interval time.Duration
@@ -67,7 +75,8 @@ type watched struct {
 	owner  string // Origin.Ref of what is installed, "" for nothing
 }
 
-// Watch loads opts.Sources into a bundle.Live, compiled as Load compiles,
+// Watch loads opts.Sources and the bundles under opts.Roots into a
+// bundle.Live, compiled as Load compiles,
 // installs every capability file in the catalog, and keeps them current:
 // the Live reloads every opts.Interval, and each new catalog is applied to
 // the registry.
@@ -91,14 +100,31 @@ type watched struct {
 // before Watch returns. Reloading stops when ctx ends or Close is called;
 // installed capabilities stay installed.
 func Watch(ctx context.Context, r *registry.Registry, opts WatchOptions) (*Watcher, error) {
-	if len(opts.Sources) == 0 {
-		return nil, errors.New("starlarkcap.Watch: WatchOptions.Sources is required")
+	if len(opts.Sources) == 0 && len(opts.Roots) == 0 {
+		return nil, errors.New("starlarkcap.Watch: WatchOptions.Sources or Roots is required")
+	}
+	for _, root := range opts.Roots {
+		// bundle.Children reads a missing folder as empty; a mistyped root
+		// would silently watch nothing.
+		if fi, err := os.Stat(root); err != nil || !fi.IsDir() {
+			return nil, fmt.Errorf("starlarkcap.Watch: root %s is not a directory", root)
+		}
 	}
 	if opts.Interval <= 0 {
 		opts.Interval = time.Second
 	}
-	o := bundle.Options{Sources: slices.Clone(opts.Sources), Compilers: compilers(opts.Load)}
-	live, err := bundle.NewLive(ctx, func(context.Context) (bundle.Options, error) { return o, nil })
+	sources, roots, comps := slices.Clone(opts.Sources), slices.Clone(opts.Roots), compilers(opts.Load)
+	live, err := bundle.NewLive(ctx, func(ctx context.Context) (bundle.Options, error) {
+		all := slices.Clone(sources)
+		for _, root := range roots {
+			children, err := bundle.Children(ctx, root)
+			if err != nil {
+				return bundle.Options{}, err
+			}
+			all = append(all, children...)
+		}
+		return bundle.Options{Sources: all, Compilers: comps}, nil
+	})
 	if err != nil {
 		return nil, loadError(err)
 	}

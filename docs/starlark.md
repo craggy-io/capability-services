@@ -309,6 +309,11 @@ with `Run`; a `Subscribe` callback applies the result.
 - **Bundles only.** Every source needs its `bundle.yaml`. Declare a contribution
   to add a file; remove it from the manifest to unload the prefix with
   `r.Replace(prefix)`. Modules and test files are not watched as capability files.
+- **Roots discover bundles.** `WatchOptions.Roots` names folders whose child
+  folders with a `bundle.yaml` are bundles (`bundle.Children`), listed again on
+  every reload: adding a bundle folder installs its files, removing one unloads
+  them. A root must exist when `Watch` is called. `Sources` and `Roots` combine;
+  at least one is required.
 - **The first load must succeed.** Otherwise `Watch` returns the error
   (`invalid`, with the diagnostics and the `*bundle.LoadError`) and starts nothing.
 - **Reloads are whole-catalog.** When any bundle fails to load (a syntax error in

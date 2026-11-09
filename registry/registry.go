@@ -61,6 +61,8 @@ type Registry struct {
 	jobJournalMu   sync.Mutex
 	jobJournalPath string
 	jobJournalErr  error
+	sharedErr      error                    // under jobJournalMu
+	sharedPut      map[string]sharedPutMark // under jobJournalMu: last shared write per running job
 
 	sems map[string]chan struct{} // tag -> semaphore (built in New)
 
@@ -152,7 +154,7 @@ func New(opts ...Option) *Registry {
 	cfg.middleware = mw
 	r := &Registry{
 		cfg: cfg, ready: map[capKey]readyState{},
-		changed: make(chan struct{}), jobs: map[string]*Job{},
+		changed: make(chan struct{}), jobs: map[string]*Job{}, sharedPut: map[string]sharedPutMark{},
 		sems: map[string]chan struct{}{}, stopCh: make(chan struct{}),
 	}
 	r.stopCtx, r.stopCancel = context.WithCancel(context.Background())

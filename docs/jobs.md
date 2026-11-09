@@ -23,6 +23,9 @@ ordinary capabilities.
 - Per-tag concurrency limits; per-caller access rules.
 - An optional status journal that reports interrupted jobs as `lost` after a
   restart.
+- Optionally, a job table shared by every instance of a service, and long jobs
+  handed to a task queue that runs each inside a request
+  ([shared jobs and dispatch](#shared-jobs-and-dispatch)).
 - `jobs.list`, `jobs.get`, `jobs.wait`, `jobs.cancel` as capabilities, in a
   `LoadAlways` group.
 
@@ -84,6 +87,40 @@ access rule allows; anything else is `not_found`. They need a view on their
 context, which every registry call provides. `jobs.Group()` is
 `{Name: "jobs", LoadAlways: true}`: an agent that starts a long capability needs the
 controls to follow its handle.
+
+## Shared jobs and dispatch
+
+A service with several instances (Cloud Run) needs two things the in-memory
+table cannot give: a poll that reaches another instance must find the job, and
+a long job must keep CPU after the response that started it (Cloud Run
+throttles CPU between requests). ADR [0001](decisions/0001-shared-jobs-and-dispatch.md).
+
+- `ShareJobs(store SharedJobs)` writes every job's `JobRecord` to `store`:
+  state changes always, a running job's progress at most once a second. Job IDs
+  become random (`job-` and 24 hex digits). `Job`, `JobFor`, `Jobs`, `JobsFor`,
+  and so `jobs.*` and `/v1/jobs/{id}`, find jobs other instances hold. Such a
+  handle re-reads the store: `Status` and `Result` read it once, `Wait` polls
+  every 250 ms until the job is terminal, `Events` emits one event per read
+  that moved its `Seq` (intermediate events are not replayed), and `Cancel`
+  asks the holding instance through the store, which checks every second.
+  Retention is the store's: `List` drops jobs ended longer than `KeepJobs`
+  ago. `JobStoreError` reports the first failed write. It cannot be combined
+  with `OpenJobJournal`.
+- `DispatchLong(d Dispatcher)` makes `Start` of a `Long` capability record the
+  job `queued` in the store and hand a `Task` (job ID, exact capability, input,
+  caller, parent) to `d` instead of running it. Quick capabilities still run in
+  the calling request. The host serves the queue's deliveries and calls
+  `RunTask(ctx, task)`, which claims the job (exactly one delivery wins; the
+  rest get `ErrTaskNotQueued`, to be acknowledged) and runs it to its end in
+  that request, under the registry's full view with the recorded caller; the
+  request's end cancels it. Start already applied the starting view. A refused
+  dispatch fails the `Start` with `unavailable`. It needs `ShareJobs`.
+- A dispatched job's parent link is recorded but cancelling the parent does not
+  cancel it across instances.
+- `SharedJobs` implementations pass `jobstoretest.Run`; `jobstoretest.Memory`
+  is an in-process one. `adapters/postgres` (its own module, pgx) is the
+  PostgreSQL one: one row per job, guarded so an older or non-final record
+  never replaces a newer or final one; `Claim` is a conditional update.
 
 ## Working with other packages
 

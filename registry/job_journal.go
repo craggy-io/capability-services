@@ -15,12 +15,13 @@ import (
 	"github.com/craggy-io/foundation-kit/fsx"
 )
 
-// jobRecord is the durable projection of one job. The journal appends the
+// JobRecord is the durable projection of one job: what the job journal and a
+// SharedJobs store keep. The journal appends the
 // latest record after each state or progress event; startup keeps the newest
 // record per id. Handler goroutines cannot be resumed after a process exits,
 // so restored non-terminal jobs are explicitly marked lost while preserving
 // their last progress and caller identity.
-type jobRecord struct {
+type JobRecord struct {
 	Status JobStatus       `json:"status"`
 	Result json.RawMessage `json:"result,omitempty"`
 	// The capability's filter-relevant fields, persisted so a restored
@@ -52,6 +53,9 @@ func (r *Registry) OpenJobJournal(path string) error {
 	if len(r.jobs) != 0 || r.jobJournalPath != "" {
 		return fmt.Errorf("registry: job journal must be opened before jobs start")
 	}
+	if r.cfg.shared != nil {
+		return fmt.Errorf("registry: a registry with ShareJobs keeps no job journal")
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("registry: create job journal directory: %w", err)
 	}
@@ -63,7 +67,7 @@ func (r *Registry) OpenJobJournal(path string) error {
 	// first, and commit path + jobs only once all of it succeeded. A
 	// failed Open then leaves the registry untouched and retryable.
 	restored := make(map[string]*Job, len(latest))
-	records := make([]jobRecord, 0, len(latest))
+	records := make([]JobRecord, 0, len(latest))
 	cutoff := time.Now().Add(-r.cfg.keepJobs)
 	for id, rec := range latest {
 		if r.cfg.keepJobs > 0 && rec.Status.State.Terminal() && !rec.Status.Ended.IsZero() && rec.Status.Ended.Before(cutoff) {
@@ -98,23 +102,23 @@ func (r *Registry) JobJournalError() error {
 	return r.jobJournalErr
 }
 
-func readJobJournal(path string) (map[string]jobRecord, error) {
+func readJobJournal(path string) (map[string]JobRecord, error) {
 	f, err := os.Open(path)
 	if os.IsNotExist(err) {
-		return map[string]jobRecord{}, nil
+		return map[string]JobRecord{}, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("registry: open job journal: %w", err)
 	}
 	defer f.Close()
-	latest := map[string]jobRecord{}
+	latest := map[string]JobRecord{}
 	// ReadBytes, not a Scanner: records carry whole results, and a fixed
 	// token cap would make any journal past it unreadable.
 	br := bufio.NewReader(f)
 	for line := 1; ; line++ {
 		raw, err := br.ReadBytes('\n')
 		if len(bytes.TrimSpace(raw)) > 0 {
-			var rec jobRecord
+			var rec JobRecord
 			if uerr := json.Unmarshal(raw, &rec); uerr != nil {
 				return nil, fmt.Errorf("registry: job journal line %d: %w", line, uerr)
 			}
@@ -133,19 +137,24 @@ func readJobJournal(path string) (map[string]jobRecord, error) {
 	return latest, nil
 }
 
-func restoredJob(rec jobRecord, persist func(jobRecord)) (*Job, error) {
+func restoredJob(rec JobRecord, persist func(JobRecord)) (*Job, error) {
+	if !rec.Status.State.Terminal() {
+		rec.Status.State = JobLost
+		rec.Status.Ended = time.Now()
+		rec.Status.Error = &ErrorInfo{Code: Internal, Reason: "process_restarted",
+			Message: "the process restarted before the job completed", Retryable: false}
+		rec.Result = nil
+	}
+	return recordJob(rec, persist)
+}
+
+// recordJob rebuilds a finished Job from rec.
+func recordJob(rec JobRecord, persist func(JobRecord)) (*Job, error) {
 	name, version, pinned, ok := ParseRef(rec.Status.Capability)
 	if !ok || !pinned {
 		return nil, fmt.Errorf("invalid capability %q", rec.Status.Capability)
 	}
 	status := rec.Status
-	if !status.State.Terminal() {
-		status.State = JobLost
-		status.Ended = time.Now()
-		status.Error = &ErrorInfo{Code: Internal, Reason: "process_restarted",
-			Message: "the process restarted before the job completed", Retryable: false}
-		rec.Result = nil
-	}
 	done := make(chan struct{})
 	close(done)
 	capab := Capability{Name: name, Version: version, Title: rec.Title, Description: rec.Description,
@@ -171,7 +180,11 @@ func advanceJobCounter(id string) {
 	}
 }
 
-func (r *Registry) persistJob(rec jobRecord) {
+func (r *Registry) persistJob(rec JobRecord) {
+	if r.cfg.shared != nil {
+		r.putShared(rec)
+		return
+	}
 	r.jobJournalMu.Lock()
 	defer r.jobJournalMu.Unlock()
 	if r.jobJournalPath == "" || r.jobJournalErr != nil {
@@ -194,8 +207,8 @@ func (r *Registry) persistJob(rec jobRecord) {
 	}
 }
 
-func (r *Registry) jobRecordsLocked() []jobRecord {
-	records := make([]jobRecord, 0, len(r.jobs))
+func (r *Registry) jobRecordsLocked() []JobRecord {
+	records := make([]JobRecord, 0, len(r.jobs))
 	for _, job := range r.jobs {
 		job.mu.Lock()
 		records = append(records, job.recordLocked())
@@ -207,7 +220,7 @@ func (r *Registry) jobRecordsLocked() []jobRecord {
 // writeJobJournalFile replaces the journal at path with exactly records,
 // atomically and durably with fsx.Write, so a failed or interrupted
 // compaction never truncates the live journal.
-func writeJobJournalFile(path string, records []jobRecord) error {
+func writeJobJournalFile(path string, records []JobRecord) error {
 	err := fsx.Write(path, 0o600, func(w io.Writer) error {
 		enc := json.NewEncoder(w)
 		for _, rec := range records {

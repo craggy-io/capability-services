@@ -169,7 +169,7 @@ func (v *View) Start(ctx context.Context, ref string, in json.RawMessage) (*Job,
 	}
 	parent, _ := ctx.Value(jobKey).(*jobCtx)
 	job := &Job{
-		id: newJobID(), capab: rc.capab, supBy: supBy, caller: caller,
+		id: v.reg.newJobIDFor(), capab: rc.capab, supBy: supBy, caller: caller,
 		done: make(chan struct{}), state: JobQueued,
 		started: time.Now(), hbDur: hb, subs: map[chan Event]struct{}{}, persist: v.reg.persistJob,
 	}
@@ -189,6 +189,13 @@ func (v *View) Start(ctx context.Context, ref string, in json.RawMessage) (*Job,
 	if err != nil {
 		cancel()
 		return nil, err
+	}
+	if rc.capab.Long && v.reg.cfg.dispatcher != nil {
+		cancel()
+		if v.reg.cfg.shared == nil {
+			return nil, Errorf(Unavailable, "%s: DispatchLong needs ShareJobs", rc.capab.Ref())
+		}
+		return v.dispatch(job, input)
 	}
 
 	// Insert the job and count its runner in one step under jobsMu, the
@@ -261,6 +268,9 @@ func (r *Registry) runJob(ctx context.Context, job *Job, rc resolvedCap, handler
 	}
 	defer release()
 
+	if r.cfg.shared != nil {
+		go r.watchCancel(job)
+	}
 	job.markRunning()
 	var (
 		out any

@@ -21,7 +21,9 @@ Core:
   change, versions, supersession, views as policy, readiness, groups, errors and
   descriptors.
 - [Jobs](jobs.md): the job lifecycle, stage progress, cancellation, access, the
-  status journal, and the `jobs` package's `jobs.*` capabilities.
+  status journal, shared jobs across instances and dispatch to a task queue,
+  and the `jobs` package's `jobs.*` capabilities.
+- [Long-poll](longpoll.md): an ordered change log as a capability that waits.
 
 Projections:
 

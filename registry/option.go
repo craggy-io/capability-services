@@ -28,6 +28,8 @@ type config struct {
 	validateOutput bool
 	checkTimeout   time.Duration
 	drainTimeout   time.Duration
+	shared         SharedJobs
+	dispatcher     Dispatcher
 }
 
 func defaultConfig() config {

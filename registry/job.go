@@ -129,7 +129,10 @@ type Job struct {
 	result    json.RawMessage
 	history   []Event
 	subs      map[chan Event]struct{}
-	persist   func(jobRecord)
+	persist   func(JobRecord)
+	// remote is set on a handle for a job another instance holds (or a
+	// dispatched one): its state is re-read from the shared store.
+	remote SharedJobs
 
 	hbDur time.Duration
 }
@@ -144,6 +147,7 @@ func (j *Job) Capability() string { return j.capab.Ref() }
 // than its capability's Heartbeat reports stalled; it flips back to running
 // on the next update.
 func (j *Job) Status() JobStatus {
+	j.refresh(context.Background())
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	return j.statusLocked(time.Now())
@@ -201,6 +205,7 @@ func (j *Job) statusLocked(now time.Time) JobStatus {
 
 // Result returns the encoded result if the job succeeded.
 func (j *Job) Result() (json.RawMessage, bool) {
+	j.refresh(context.Background())
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	if j.state != JobSucceeded {
@@ -212,6 +217,9 @@ func (j *Job) Result() (json.RawMessage, bool) {
 // Wait blocks until the job reaches a terminal state or ctx ends. A ctx
 // that ends leaves the job running; only Cancel stops it.
 func (j *Job) Wait(ctx context.Context) (json.RawMessage, error) {
+	if j.remote != nil {
+		j.follow(ctx, nil)
+	}
 	select {
 	case <-j.done:
 	case <-ctx.Done():
@@ -256,6 +264,15 @@ func infoMessage(i *ErrorInfo, fallback string) string {
 // fire the context children are tied to, so a parent that finished
 // normally leaves its children running however often it is cancelled.
 func (j *Job) Cancel() {
+	if j.remote != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), sharedTimeout)
+		defer cancel()
+		j.refresh(ctx)
+		if !j.Status().State.Terminal() {
+			_ = j.remote.RequestCancel(ctx, j.id)
+		}
+		return
+	}
 	j.mu.Lock()
 	if j.state.Terminal() || j.cancelFired {
 		j.mu.Unlock()
@@ -274,6 +291,9 @@ func (j *Job) Cancel() {
 // channel closes when the job is terminal and replay is drained, or when
 // ctx ends.
 func (j *Job) Events(ctx context.Context) <-chan Event {
+	if j.remote != nil {
+		return j.remoteEvents(ctx)
+	}
 	out := make(chan Event, 16)
 	ch := make(chan Event, 64)
 	j.mu.Lock()
@@ -382,8 +402,8 @@ func (j *Job) emitLocked(ev Event) {
 	}
 }
 
-func (j *Job) recordLocked() jobRecord {
-	return jobRecord{
+func (j *Job) recordLocked() JobRecord {
+	return JobRecord{
 		Status: j.statusLocked(time.Now()), Result: append(json.RawMessage(nil), j.result...),
 		Title: j.capab.Title, Description: j.capab.Description,
 		Tags: append([]string(nil), j.capab.Tags...), Effects: j.capab.Effects,

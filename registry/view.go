@@ -163,6 +163,11 @@ func (v *View) Job(id string) (*Job, bool) {
 	v.reg.jobsMu.RLock()
 	j, ok := v.reg.jobs[id]
 	v.reg.jobsMu.RUnlock()
+	if !ok {
+		if j = v.reg.remoteJob(id); j != nil {
+			ok = true
+		}
+	}
 	if !ok || !v.Allows(j.capab) {
 		return nil, false
 	}
@@ -200,10 +205,13 @@ func (v *View) jobsFiltered(f JobFilter, caller Caller, checkAccess bool) []JobS
 	v.reg.purgeJobs()
 	v.reg.jobsMu.RLock()
 	jobs := make([]*Job, 0, len(v.reg.jobs))
-	for _, j := range v.reg.jobs {
+	local := make(map[string]bool, len(v.reg.jobs))
+	for id, j := range v.reg.jobs {
 		jobs = append(jobs, j)
+		local[id] = true
 	}
 	v.reg.jobsMu.RUnlock()
+	jobs = append(jobs, v.reg.remoteJobs(local)...)
 	out := []JobStatus{}
 	for _, j := range jobs {
 		if !v.Allows(j.capab) {

@@ -44,6 +44,8 @@ summarises) and the executable package examples (`*/example_test.go`), which
 | Serve a view over MCP | [mcp](docs/projections.md#mcp) |
 | Serve a view over HTTP with OpenAPI | [httpapi](docs/projections.md#http) |
 | Serve HTTP, MCP and a change feed on one authenticated port | [server](docs/projections.md#server) |
+| Share jobs across instances; run long jobs from a task queue | [registry shared jobs](docs/jobs.md#shared-jobs-and-dispatch), [adapters/postgres](docs/jobs.md#shared-jobs-and-dispatch) |
+| Serve an ordered change log as a waiting call (through buffering proxies, across instances) | [longpoll](docs/longpoll.md) |
 | Let scripts call capabilities, define them in bundles, hot-reload or test them | [starlarkcap](docs/starlark.md) |
 | Prove a new projection behaves like the others | [conformance](docs/conformance.md) |
 
@@ -292,6 +294,7 @@ From this module root, inside the Go workspace described in the
 ```sh
 go build ./... && go vet ./... && go test ./... -count=1
 go test -race ./...
+(cd adapters/postgres && CAPABILITY_SERVICES_POSTGRES_DSN=... go test -race ./...)  # fails, never skips, without a database
 go test -tags craggy_debug ./...
 ```
 

@@ -45,6 +45,9 @@ also builds on `tools`. `registry` imports none of the other packages.
 | --- | --- | --- | --- |
 | `registry` | The capability shape, typed `Func` registration, snapshots, versions, supersession, views/filters, middleware, jobs, readiness, groups, codes and reasons, `Descriptor`. Standard library plus `google/jsonschema-go` only. | none | [Registry](docs/registry.md) |
 | `jobs` | `jobs.list`, `jobs.get`, `jobs.wait`, `jobs.cancel` as capabilities, their group and `WaitOut`. | registry | [Jobs](docs/jobs.md) |
+| `registry/jobstoretest` | The `SharedJobs` conformance suite and an in-memory store. | registry | [Jobs](docs/jobs.md#shared-jobs-and-dispatch) |
+| `longpoll` | An ordered change log as a capability that waits up to 25 s for the next change. | registry | [Long-poll](docs/longpoll.md) |
+| `adapters/postgres` (own module) | `SharedJobs` in PostgreSQL (pgx). | registry | [Jobs](docs/jobs.md#shared-jobs-and-dispatch) |
 | `tools` | LLM tool definitions and tool-call dispatch for in-process agent loops. No provider SDK. | registry | [Projections](docs/projections.md#tools-in-process-tool-calling-loops) |
 | `mcp` | MCP projection on the official Go SDK: live tool sync, progress notifications, per-session `Caller`, `OnClose`. | registry, tools | [Projections](docs/projections.md#mcp) |
 | `httpapi` | HTTP projection: `POST /v1/{ref}`, 202 + `Location`, `Prefer: wait=N`, job status/SSE/cancel, listings, health, OpenAPI 3.1. Standard library only. | registry | [Projections](docs/projections.md#http) |

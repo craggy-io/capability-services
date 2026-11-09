@@ -3,7 +3,7 @@ module github.com/craggy-io/capability-services/adapters/postgres
 go 1.27.0
 
 require (
-	github.com/craggy-io/capability-services v0.0.0
+	github.com/craggy-io/capability-services v0.3.2-0.20261109212706-5ee7e085ba2e
 	github.com/jackc/pgx/v5 v5.12.0
 )
 
@@ -16,5 +16,3 @@ require (
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 )
-
-replace github.com/craggy-io/capability-services => ../..

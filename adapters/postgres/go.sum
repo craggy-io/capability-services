@@ -1,3 +1,5 @@
+github.com/craggy-io/capability-services v0.3.2-0.20261109212706-5ee7e085ba2e h1:xCWgElElAliXlYR0Wlh084Pld7ve9tnkpkl+wJZuSok=
+github.com/craggy-io/capability-services v0.3.2-0.20261109212706-5ee7e085ba2e/go.mod h1:zxeJsNvalYg3Co/wK1cZEzDJ6zA4zieFdyQiZomuEyM=
 github.com/craggy-io/foundation-kit v0.0.0-20261107163733-c46d9e6ce3cc h1:KyGyrIhgSdxtiVA8g903pDPmoulSYFuz23OLu+t9m1Y=
 github.com/craggy-io/foundation-kit v0.0.0-20261107163733-c46d9e6ce3cc/go.mod h1:grT6r7EVfoxyZ6/GiQuocUvqLOCAsMSh5oOwdzwuHdg=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=

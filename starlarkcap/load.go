@@ -57,13 +57,15 @@ import (
 //
 //	capability(name, version=1, title="", description="", input=None,
 //	           output=None, effects=[], tags=[], supersedes=[], requires=[],
-//	           accepts=[], emits=[], long=False, heartbeat=0, run=<fn>, check=None)
+//	           accepts=[], emits=[], dependencies=[], long=False, heartbeat=0, run=<fn>, check=None)
 //
 // input/output accept schema.* values, a field dict, a raw JSON Schema
 // dict, a JSON string, or a declared type's name (LoadOptions.Types, or
 // the contribution's types asset). effects are names ("read_only",
 // "idempotent", "destructive", "open_world"). heartbeat is in seconds.
 // accepts/emits entries are type strings or {"type", "level"} dicts.
+// dependencies entries are {"kind", "name"} dicts, resolved by the host's
+// registry dependency resolver before the capability is advertised.
 // run(ctx, input) returns a JSON-shaped value; check(ctx) returns
 // None/True for ready, or fails / returns False or a message for not
 // ready. ctx has job_id, caller, progress(stage=, message=, done=, total=,
@@ -472,7 +474,7 @@ func maySupersede(all *registry.View, prefix, name, ref string, policy registry.
 var capabilityKwargs = map[string]bool{
 	"name": true, "version": true, "title": true, "description": true,
 	"input": true, "output": true, "effects": true, "tags": true,
-	"supersedes": true, "requires": true, "accepts": true, "emits": true, "long": true,
+	"supersedes": true, "requires": true, "accepts": true, "emits": true, "dependencies": true, "long": true,
 	"heartbeat": true, "run": true, "check": true,
 }
 
@@ -589,6 +591,9 @@ func buildCapability(args sl.Tuple, kwargs []sl.Tuple, lim script.Limits, print 
 	if c.Requires, err = getStrings("requires"); err != nil {
 		return c, err
 	}
+	if c.Dependencies, err = getDependencies(kw); err != nil {
+		return c, err
+	}
 	if c.Accepts, err = getSubjects(kw, "accepts"); err != nil {
 		return c, err
 	}
@@ -630,6 +635,35 @@ func buildCapability(args sl.Tuple, kwargs []sl.Tuple, lim script.Limits, print 
 
 // getSubjects reads accepts or emits. Each entry is a type string, or a
 // dict with "type" and an optional "level". Both values stay opaque.
+func getDependencies(kw map[string]sl.Value) ([]registry.Dependency, error) {
+	v, ok := kw["dependencies"]
+	if !ok || v == sl.None {
+		return nil, nil
+	}
+	gv, err := values.ToGo(v)
+	if err != nil {
+		return nil, fmt.Errorf("capability: dependencies: %w", err)
+	}
+	lst, ok := gv.([]any)
+	if !ok {
+		return nil, fmt.Errorf("capability: dependencies must be a list")
+	}
+	out := make([]registry.Dependency, 0, len(lst))
+	for i, item := range lst {
+		m, ok := item.(map[string]any)
+		if !ok || len(m) != 2 {
+			return nil, fmt.Errorf("capability: dependencies[%d] needs kind and name", i)
+		}
+		kind, kindOK := m["kind"].(string)
+		name, nameOK := m["name"].(string)
+		if !kindOK || !nameOK || strings.TrimSpace(kind) == "" || strings.TrimSpace(name) == "" {
+			return nil, fmt.Errorf("capability: dependencies[%d] needs nonempty string kind and name", i)
+		}
+		out = append(out, registry.Dependency{Kind: kind, Name: name})
+	}
+	return out, nil
+}
+
 func getSubjects(kw map[string]sl.Value, key string) ([]registry.Subject, error) {
 	v, ok := kw[key]
 	if !ok || v == sl.None {

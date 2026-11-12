@@ -102,6 +102,48 @@ func TestNonLoopbackNeedsAuth(t *testing.T) {
 	}
 }
 
+// A server with no Authenticate trusts its loopback address, which every web
+// page the user opens can reach too.
+func TestAnonymousServerRefusesWhatAWebPageCanSend(t *testing.T) {
+	s, err := server.New(server.Config{API: testRegistry(t).View(registry.All)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+	post := func(headers map[string]string, host string) int {
+		req, _ := http.NewRequest(http.MethodPost, ts.URL+"/v1/test/echo", strings.NewReader(`{"message":"hi"}`))
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		if host != "" {
+			req.Host = host
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if code := post(nil, ""); code != http.StatusOK {
+		t.Fatalf("a local client: %d", code)
+	}
+	if code := post(map[string]string{"Sec-Fetch-Site": "same-origin"}, ""); code != http.StatusOK {
+		t.Fatalf("the server's own page: %d", code)
+	}
+	refused := map[string]int{
+		"a page on another site":      post(map[string]string{"Sec-Fetch-Site": "cross-site", "Content-Type": "text/plain"}, ""),
+		"another origin, old browser": post(map[string]string{"Origin": "https://evil.example"}, ""),
+		"a rebound host name":         post(nil, "evil.example:8787"),
+	}
+	for name, code := range refused {
+		if code != http.StatusForbidden {
+			t.Errorf("%s: %d, want 403", name, code)
+		}
+	}
+}
+
 func TestEventsReplayAndReset(t *testing.T) {
 	hub := feed.New[string](feed.Options{})
 	hub.Publish("one")

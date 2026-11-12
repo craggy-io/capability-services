@@ -43,7 +43,7 @@ func (v *View) Intersect(other *View) *View {
 
 // entry describes rc; c is a clone of rc.capab the entry takes ownership of.
 func (v *View) entry(s *snapshot, k capKey, rc resolvedCap, c Capability) Entry {
-	ready, errMsg := v.reg.readyOf(k, rc.capab.Check != nil)
+	ready, errMsg := v.reg.readyOf(k, hasCheck(rc.capab))
 	return Entry{
 		Capability:   c,
 		Current:      s.current[k.name] == k.version,
@@ -284,7 +284,13 @@ func (r *Registry) purgeJobs() {
 	}
 	// Compact the journal too, or it would grow for the whole process
 	// lifetime and resurrect every expired job at the next restart.
-	if !purged || r.jobJournalPath == "" {
+	// A failed replacement (for example a temporary Windows file lock)
+	// leaves the in-memory purge complete. Retry that snapshot on the next
+	// maintenance pass even when no further job expires.
+	r.jobJournalMu.Lock()
+	retry := r.jobJournalErr != nil
+	r.jobJournalMu.Unlock()
+	if (!purged && !retry) || r.jobJournalPath == "" {
 		r.jobsMu.Unlock()
 		return
 	}
@@ -313,9 +319,7 @@ func (r *Registry) purgeJobs() {
 		}
 	}
 	if !stale {
-		if err := writeJobJournalFile(r.jobJournalPath, records); err != nil && r.jobJournalErr == nil {
-			r.jobJournalErr = err
-		}
+		r.jobJournalErr = writeJobJournalFile(r.jobJournalPath, records)
 	}
 	r.jobJournalMu.Unlock()
 	r.jobsMu.Unlock()

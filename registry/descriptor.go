@@ -26,6 +26,7 @@ type Descriptor struct {
 	Tags         []string        `json:"tags,omitempty"`
 	Supersedes   []string        `json:"supersedes,omitempty"`
 	Requires     []string        `json:"requires,omitempty"`
+	Dependencies []DependencyRef `json:"dependencies,omitempty"`
 	Accepts      []Subject       `json:"accepts,omitempty"`
 	Emits        []Subject       `json:"emits,omitempty"`
 	Long         bool            `json:"long,omitempty"`
@@ -77,9 +78,9 @@ func (e Entry) Descriptor() Descriptor {
 		Title: e.Title, Description: e.Description, Input: in, Output: out,
 		Examples: examples, Effects: effects,
 		Tags: append([]string(nil), e.Tags...), Supersedes: append([]string(nil), e.Supersedes...),
-		Requires: append([]string(nil), e.Requires...),
-		Accepts:  append([]Subject(nil), e.Accepts...), Emits: append([]Subject(nil), e.Emits...), Long: e.Long,
-		HeartbeatMs: e.Heartbeat.Milliseconds(), HasCheck: e.Check != nil,
+		Requires: append([]string(nil), e.Requires...), Dependencies: dependencyRefs(e.Dependencies),
+		Accepts: append([]Subject(nil), e.Accepts...), Emits: append([]Subject(nil), e.Emits...), Long: e.Long,
+		HeartbeatMs: e.Heartbeat.Milliseconds(), HasCheck: hasCheck(e.Capability),
 		Current: e.Current, SupersededBy: append([]string(nil), e.SupersededBy...), Group: e.Group,
 		Ready: e.Ready, CheckError: e.CheckError,
 	}
@@ -96,6 +97,17 @@ func marshalSchemaJSON(s interface {
 		return json.RawMessage("{}")
 	}
 	return b
+}
+
+func dependencyRefs(in []Dependency) []DependencyRef {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]DependencyRef, len(in))
+	for i, dep := range in {
+		out[i] = DependencyRef{Kind: dep.Kind, Name: dep.Name}
+	}
+	return out
 }
 
 // Descriptors returns the full projection of this view: List()

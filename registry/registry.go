@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -305,6 +306,11 @@ func normalize(c Capability) (capKey, resolvedCap, error) {
 			return capKey{}, resolvedCap{}, Errorf(Invalid, "%s: invalid requires ref %q", c.Name, ref)
 		}
 	}
+	for _, dep := range c.Dependencies {
+		if strings.TrimSpace(dep.Kind) == "" || strings.TrimSpace(dep.Name) == "" {
+			return capKey{}, resolvedCap{}, Errorf(Invalid, "%s: dependencies need kind and name", c.Name)
+		}
+	}
 	accepts, err := normalizeSubjects(c.Name, "accepts", c.Accepts)
 	if err != nil {
 		return capKey{}, resolvedCap{}, err
@@ -319,6 +325,7 @@ func normalize(c Capability) (capKey, resolvedCap, error) {
 	c.Tags = dedupeStrings(c.Tags)
 	c.Supersedes = dedupeStrings(c.Supersedes)
 	c.Requires = dedupeStrings(c.Requires)
+	c.Dependencies = append([]Dependency(nil), c.Dependencies...)
 	c.Accepts = accepts
 	c.Emits = emits
 	// The snapshot is immutable, so it must own its schemas: a caller
@@ -476,6 +483,7 @@ func cloneCapability(c Capability) Capability {
 	c.Tags = append([]string(nil), c.Tags...)
 	c.Supersedes = append([]string(nil), c.Supersedes...)
 	c.Requires = append([]string(nil), c.Requires...)
+	c.Dependencies = append([]Dependency(nil), c.Dependencies...)
 	c.Accepts = append([]Subject(nil), c.Accepts...)
 	c.Emits = append([]Subject(nil), c.Emits...)
 	if c.Examples != nil {

@@ -20,16 +20,17 @@ type Option struct {
 }
 
 type config struct {
-	middleware     []Middleware
-	limits         map[string]int
-	checkEvery     time.Duration
-	keepJobs       time.Duration
-	jobAccess      func(Caller, JobStatus) bool
-	validateOutput bool
-	checkTimeout   time.Duration
-	drainTimeout   time.Duration
-	shared         SharedJobs
-	dispatcher     Dispatcher
+	middleware         []Middleware
+	limits             map[string]int
+	checkEvery         time.Duration
+	keepJobs           time.Duration
+	jobAccess          func(Caller, JobStatus) bool
+	validateOutput     bool
+	checkTimeout       time.Duration
+	dependencyResolver func(context.Context, Dependency) error
+	drainTimeout       time.Duration
+	shared             SharedJobs
+	dispatcher         Dispatcher
 }
 
 func defaultConfig() config {
@@ -44,6 +45,12 @@ func defaultConfig() config {
 }
 
 // --- Registry options ---
+
+// WithDependencyResolver evaluates dependencies declared without their own
+// Go probe, including those loaded from script capability definitions.
+func WithDependencyResolver(resolve func(context.Context, Dependency) error) Option {
+	return Option{regFn: func(c *config) { c.dependencyResolver = resolve }}
+}
 
 // Use appends middleware. The first middleware added is outermost.
 func Use(mw ...Middleware) Option {
@@ -177,6 +184,11 @@ func WithOrigin(o Origin) Option {
 // WithCheck sets the readiness check.
 func WithCheck(f func(ctx context.Context) error) Option {
 	return Option{capFn: func(c *Capability) { c.Check = f }}
+}
+
+// WithDependencies declares external prerequisites for this capability.
+func WithDependencies(dependencies ...Dependency) Option {
+	return Option{capFn: func(c *Capability) { c.Dependencies = append(c.Dependencies, dependencies...) }}
 }
 
 // WithInput overrides the derived input schema. Pass nil for no input.

@@ -54,14 +54,14 @@ Registration:
 
 - `Func[In, Out](name, title, fn, opts...) Capability`. Options: `Describe`,
   `WithVersion`, `WithEffects`, `WithTags`, `WithSupersedes`, `WithAccepts`,
-  `WithEmits`, `WithExample(note, input)`, `AsLong(heartbeat)`, `WithCheck`,
+  `WithEmits`, `WithExample(note, input)`, `AsLong(heartbeat)`, `WithCheck`, `WithDependencies`,
   `WithInput`/`WithOutput`, `WithOrigin`. `In`/`Out` may be `json.RawMessage`
   (passed through) or `any` (unstructured); `struct{}` input is the empty object
   schema.
 - `SchemaFor[T]()`, `ParseSchema(raw)`, `EmptyObjectSchema()`.
-- `New(opts...) *Registry`. Options: `Use`, `Limit`, `CheckEvery`, `CheckTimeout`,
+- `New(opts...) *Registry`. Options: `Use`, `Limit`, `CheckEvery`, `CheckTimeout`, `WithDependencyResolver`,
   `KeepJobs`, `WithJobAccess`, `ValidateOutput`, `JobDrainTimeout`.
-- `(*Registry).Add`, `Replace`, `Apply(changes...)`, `Remove`, `AddGroup`, `RefreshChecks`,
+- `(*Registry).Add`, `Replace`, `Apply(changes...)`, `Remove`, `AddGroup`, `RefreshChecks`, `RefreshDependency`,
   `OpenJobJournal`, `JobJournalError`, `Close`.
 
 Views and listings:
@@ -75,6 +75,15 @@ Views and listings:
   `CheckError`), `Entry.Superseded`, `Entry.Descriptor`.
 - Names: `ValidName`, `ParseRef`, `ToolName`, `FromToolName`, `MaxToolNameLen`,
   `Capability.Ref`.
+
+External prerequisites are declared as `Dependency{Kind, Name}` on any
+capability. A Go adapter may supply a local `Check`, or the host may supply one
+`WithDependencyResolver` for all definitions. Helpers `APIKeyDependency` and
+`ResourceDependency` construct common local probes. Unmet prerequisites make
+the capability unavailable to direct callers and remove it from agent/MCP tool
+lists. Descriptors retain the dependency names and current failure reason,
+without secret values. Checks run on registration, every `CheckEvery` interval,
+and on `RefreshDependency` after a relevant setting or resource changes.
 
 Calls and context:
 

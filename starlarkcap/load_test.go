@@ -38,6 +38,33 @@ capability(name = "apkx.sneaky", run = lambda ctx, i: {})
 	}
 }
 
+func TestScriptCapabilityDeclaredDependency(t *testing.T) {
+	ready := false
+	r := registry.New(registry.CheckEvery(0), registry.WithDependencyResolver(func(_ context.Context, dep registry.Dependency) error {
+		if dep.Kind != "container" || dep.Name != "tool-image" || !ready {
+			return errors.New("container unavailable")
+		}
+		return nil
+	}))
+	defer r.Close()
+	src := `capability(name = "apk.scan", dependencies = [{"kind": "container", "name": "tool-image"}], run = lambda ctx, i: {})`
+	if _, err := load(r, "apk", "apk.star", src, starlarkcap.LoadOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if e, _ := r.Get("apk.scan"); e.Ready {
+		t.Fatal("script tool advertised without container")
+	}
+	ready = true
+	r.RefreshDependency(context.Background(), "container", "tool-image")
+	if e, _ := r.Get("apk.scan"); !e.Ready {
+		t.Fatalf("script tool stayed hidden: %+v", e)
+	}
+	bad := `capability(name = "apk.bad", dependencies = [{"kind": "container"}], run = lambda ctx, i: {})`
+	if _, err := load(r, "apk", "bad.star", bad, starlarkcap.LoadOptions{}); registry.CodeOf(err) != registry.Invalid {
+		t.Fatalf("invalid dependency accepted: %v", err)
+	}
+}
+
 func TestLoadSupersessionPolicy(t *testing.T) {
 	src := `
 capability(name = "apk.get", supersedes = ["storage.artifact.get"], run = lambda ctx, i: {})

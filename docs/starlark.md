@@ -223,7 +223,7 @@ every capability file of the catalog.
 
 ```python
 capability(name, version=1, title="", description="", input=None, output=None,
-           effects=[], tags=[], supersedes=[], requires=[], accepts=[], emits=[], long=False,
+           effects=[], tags=[], supersedes=[], requires=[], accepts=[], emits=[], dependencies=[], long=False,
            heartbeat=0, run=<fn>, check=None)
 ```
 
@@ -242,6 +242,9 @@ capability(name, version=1, title="", description="", input=None, output=None,
   `internal` with "script exceeded its time limit".
 - `check(ctx)` returns `None`, `True` or `""` for ready; `False`, a message, or a
   failure for not ready.
+- `dependencies` lists external prerequisites as `{"kind": "api_key", "name": "web.brave.api-key"}`
+  or `{"kind": "container", "name": "worker-profile"}`. The host registry's
+  dependency resolver checks them before the capability appears in tool lists.
 
 Each invocation of `run` or `check` runs on a fresh thread under `opts.Limits`.
 Modules see `schema` only; the capability file also sees `capability`, which

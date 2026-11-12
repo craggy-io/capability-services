@@ -174,15 +174,15 @@ func (p *Pinned) record(k capKey) {
 // registry no longer holds as-is runs its own Check now: pinning fixes the
 // implementation, never skips readiness.
 func (v *View) readyOf(ctx context.Context, k capKey, rc resolvedCap) (bool, string) {
-	if v.pin != nil && rc.capab.Check != nil {
+	if v.pin != nil && hasCheck(rc.capab) {
 		if cur, ok := v.reg.snap.Load().caps[k]; !ok || !sameHandler(cur, rc) {
-			if err := rc.capab.Check(ctx); err != nil {
+			if err := v.reg.checkCapability(ctx, rc.capab); err != nil {
 				return false, err.Error()
 			}
 			return true, ""
 		}
 	}
-	return v.reg.readyOf(k, rc.capab.Check != nil)
+	return v.reg.readyOf(k, hasCheck(rc.capab))
 }
 
 // sameHandler reports whether two resolved entries are the same registration.

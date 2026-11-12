@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -39,7 +40,8 @@ type Config struct {
 	// Authenticate is the host's authentication policy. It runs before every
 	// request, including /mcp and Routes. It returns the request's caller, or an
 	// error, which is answered 401 with a denied envelope. Nil means requests are
-	// anonymous, which New allows only on a loopback Addr.
+	// anonymous, which New allows only on a loopback Addr, and then only for
+	// requests a web page could not have sent (see localOnly).
 	Authenticate func(*http.Request) (registry.Caller, error)
 	// Routes are host handlers mounted beside the API, such as "/v1/events".
 	// They are authenticated like everything else.
@@ -90,6 +92,9 @@ func New(cfg Config) (*Server, error) {
 	}
 	mux.Handle("/", httpapi.Handler(cfg.API, httpapi.Info(cfg.Name, cfg.Version)))
 	s.handler = s.authenticate(mux)
+	if cfg.Authenticate == nil {
+		s.handler = localOnly(s.handler)
+	}
 	return s, nil
 }
 
@@ -121,6 +126,39 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r.WithContext(registry.WithCaller(r.Context(), caller)))
 	})
+}
+
+// localOnly guards a server whose only credential is its loopback address. Any
+// web page the user visits can reach that address, so it refuses what a page
+// could send: a cross-origin write (a no-cors POST needs no preflight), and any
+// request for a host name that is not loopback (DNS rebinding, which would make
+// the page same-origin and its responses readable).
+func localOnly(next http.Handler) http.Handler {
+	crossOrigin := http.NewCrossOriginProtection()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !loopbackHost(r.Host) {
+			writeError(w, http.StatusForbidden, "denied", "this server answers only on its loopback address")
+			return
+		}
+		if err := crossOrigin.Check(r); err != nil {
+			writeError(w, http.StatusForbidden, "denied", "cross-origin requests are refused")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// loopbackHost reports whether a Host header names this machine's loopback.
+func loopbackHost(host string) bool {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // Listener is a bound port that answers 503 until a Server is attached with

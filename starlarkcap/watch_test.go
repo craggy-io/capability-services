@@ -26,7 +26,9 @@ func writeFile(t *testing.T, dir, name, content string) {
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(p), ".tmp-*")
+	// Keep the staging file outside the watched bundle. The loader scans all
+	// files in a bundle and can otherwise race the rename of this temp file.
+	tmp, err := os.CreateTemp(t.TempDir(), ".tmp-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,8 +38,18 @@ func writeFile(t *testing.T, dir, name, content string) {
 	if err := tmp.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Rename(tmp.Name(), p); err != nil {
-		t.Fatal(err)
+	// Windows can briefly deny replacement while the watcher has the old
+	// source open. Retry that transient sharing violation.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		err = os.Rename(tmp.Name(), p)
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal(err)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
@@ -491,8 +503,8 @@ func TestWatchRoots(t *testing.T) {
 	add := func(name string) {
 		t.Helper()
 		dir := filepath.Join(root, name)
-		writeManifest(t, dir, "test."+name, "{id: "+name+", kind: capability.script@1, path: "+name+".star}")
 		writeFile(t, dir, name+".star", `capability(name = "`+name+`.x", run = lambda ctx, i: {"from": "`+name+`"})`)
+		writeManifest(t, dir, "test."+name, "{id: "+name+", kind: capability.script@1, path: "+name+".star}")
 	}
 	add("one")
 	writeFile(t, filepath.Join(root, "not-a-bundle"), "readme.txt", "no bundle.yaml: skipped")

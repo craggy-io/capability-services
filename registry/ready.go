@@ -13,7 +13,7 @@ import (
 // No Check means always ready.
 func (r *Registry) runCheck(c Capability) readyState {
 	cfg := r.cfg
-	if c.Check == nil {
+	if !hasCheck(c) {
 		return readyState{ready: true}
 	}
 	// Derived from stopCtx: Close cancels the wait below, which is what
@@ -27,7 +27,7 @@ func (r *Registry) runCheck(c Capability) readyState {
 				done <- readyState{ready: false, err: fmt.Sprintf("check panicked: %v", rec)}
 			}
 		}()
-		if err := c.Check(ctx); err != nil {
+		if err := r.checkCapability(ctx, c); err != nil {
 			done <- readyState{ready: false, err: err.Error()}
 			return
 		}
@@ -63,6 +63,24 @@ func (r *Registry) readyOf(k capKey, hasCheck bool) (bool, string) {
 // capabilities, and a slow refresh must not overwrite them (or resurrect
 // removed capabilities) with stale results keyed only by name@version.
 func (r *Registry) RefreshChecks(ctx context.Context) {
+	r.refreshChecks(ctx, func(Capability) bool { return true })
+}
+
+// RefreshDependency rechecks capabilities that declare the named external
+// dependency. Hosts call this after changing a setting or resource state so
+// tool catalogues update without waiting for the periodic refresh.
+func (r *Registry) RefreshDependency(ctx context.Context, kind, name string) {
+	r.refreshChecks(ctx, func(c Capability) bool {
+		for _, d := range c.Dependencies {
+			if d.Kind == kind && d.Name == name {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+func (r *Registry) refreshChecks(ctx context.Context, include func(Capability) bool) {
 	s := r.snap.Load()
 	type result struct {
 		k  capKey
@@ -70,7 +88,7 @@ func (r *Registry) RefreshChecks(ctx context.Context) {
 	}
 	results := make([]result, 0, len(s.caps))
 	for k, rc := range s.caps {
-		if rc.capab.Check == nil {
+		if !hasCheck(rc.capab) || !include(rc.capab) {
 			continue
 		}
 		if ctx != nil && ctx.Err() != nil {

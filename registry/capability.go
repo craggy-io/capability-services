@@ -17,24 +17,25 @@ import (
 
 // Capability is the single registration shape.
 type Capability struct {
-	Name        string             // dotted, lower-case: "storage.artifact.get"
-	Version     int                // >= 1; 0 is treated as 1
-	Title       string             // one line, for listings
-	Description string             // what it does and when to use it (agents read this)
-	Input       *jsonschema.Schema // object schema; nil means no input
-	Output      *jsonschema.Schema // nil means unstructured
-	Examples    []Example          // sample inputs agents read; each must validate against Input
-	Effects     Effects
-	Tags        []string                        // "agent", "admin", "slow", ...
-	Supersedes  []string                        // refs this replaces: "jadx.decompile" (all versions) or "apktool.decode@1"
-	Requires    []string                        // refs its handler may call; View.Pin pins them with it (see Pinned)
-	Accepts     []Subject                       // content this capability can run on; empty means it is not a content step
-	Emits       []Subject                       // hint about content the output may be; not a result
-	Long        bool                            // projections start it as a job instead of waiting for it
-	Heartbeat   time.Duration                   // a job with no Progress for this long shows as stalled; 0 = 30s
-	Check       func(ctx context.Context) error // optional readiness check
-	Handler     Handler
-	Origin      Origin // where the definition came from; zero when the host did not say
+	Name         string             // dotted, lower-case: "storage.artifact.get"
+	Version      int                // >= 1; 0 is treated as 1
+	Title        string             // one line, for listings
+	Description  string             // what it does and when to use it (agents read this)
+	Input        *jsonschema.Schema // object schema; nil means no input
+	Output       *jsonschema.Schema // nil means unstructured
+	Examples     []Example          // sample inputs agents read; each must validate against Input
+	Effects      Effects
+	Tags         []string                        // "agent", "admin", "slow", ...
+	Supersedes   []string                        // refs this replaces: "jadx.decompile" (all versions) or "apktool.decode@1"
+	Requires     []string                        // refs its handler may call; View.Pin pins them with it (see Pinned)
+	Dependencies []Dependency                    // external prerequisites checked before advertising or invoking
+	Accepts      []Subject                       // content this capability can run on; empty means it is not a content step
+	Emits        []Subject                       // hint about content the output may be; not a result
+	Long         bool                            // projections start it as a job instead of waiting for it
+	Heartbeat    time.Duration                   // a job with no Progress for this long shows as stalled; 0 = 30s
+	Check        func(ctx context.Context) error // optional readiness check
+	Handler      Handler
+	Origin       Origin // where the definition came from; zero when the host did not say
 }
 
 // Origin records where a capability's definition came from, for listings

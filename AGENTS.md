@@ -16,7 +16,8 @@ summarises) and the executable package examples (`*/example_test.go`), which
   and reasons.
 - `jobs/`: the `jobs.*` capabilities over the registry's job table.
 - Projections, each in its own package: `tools/`, `mcp/` (built on `tools`),
-  `httpapi/`, `starlarkcap/`.
+  `httpapi/`, `starlarkcap/`, and `clientgen/`, which projects descriptors into
+  typed Go client source (`cmd/clientgen` is its command).
 - `server/`: assembly of `httpapi`, `mcp` and a `foundation-kit/feed` change
   feed on one port. Authentication, tokens and caller policy are supplied by the
   host through `server.Config`; the package owns none of them.
@@ -47,6 +48,7 @@ summarises) and the executable package examples (`*/example_test.go`), which
 | Share jobs across instances; run long jobs from a task queue | [registry shared jobs](docs/jobs.md#shared-jobs-and-dispatch), [adapters/postgres](docs/jobs.md#shared-jobs-and-dispatch) |
 | Serve an ordered change log as a waiting call (through buffering proxies, across instances) | [longpoll](docs/longpoll.md) |
 | Let scripts call capabilities, define them in bundles, hot-reload or test them | [starlarkcap](docs/starlark.md) |
+| Give a compiled caller in another process or module typed Go functions for the capabilities it requires | [clientgen](docs/clientgen.md) |
 | Prove a new projection behaves like the others | [conformance](docs/conformance.md) |
 
 ## Import rules
@@ -55,9 +57,11 @@ summarises) and the executable package examples (`*/example_test.go`), which
    only**, and foundation-kit's standard-library-only packages (`fsx`,
    `canonjson`, `retryafter`), which the kit's own layer test keeps that way.
    It never imports a projection (`jobs`, `tools`, `mcp`, `httpapi`,
-   `starlarkcap`) or any domain module.
+   `starlarkcap`, `clientgen`) or any domain module.
 2. **Projections import `registry`, never the reverse**, and never each other,
-   except `mcp`, which is built on `tools`.
+   except `mcp`, which is built on `tools`. `clientgen` imports the standard
+   library and `registry` only, and the code it generates imports the standard
+   library only: never emit an import of this module or of a host.
 3. **Only `starlarkcap` imports `github.com/craggy-io/script-services`.** No
    other package in this module does, the example host included: it uses the
    aliases `starlarkcap.Position`, `Limits` and `Frame` instead. Hosts
@@ -274,7 +278,12 @@ See [Starlark](docs/starlark.md).
 - After changing a data model (`Capability`, `Descriptor`, `JobStatus`, `Update`,
   `ErrorInfo`, `tools.Result`, `starlarkcap.Loaded`), trace every reader,
   projection, JSON tag, hand-written schema (`jobs` status schema, OpenAPI) and
-  downstream consumer; silent field omissions are bugs.
+  downstream consumer; silent field omissions are bugs. `clientgen` reads
+  `Descriptor` too, as Go values and as JSON from other processes.
+- A change to what `clientgen` emits changes the bytes hosts key builds by:
+  refresh the golden files (`go test ./clientgen -update`), review the diff, and
+  keep the naming and schema rules in [docs/clientgen.md](docs/clientgen.md)
+  exact. A derived name that would clash is an error, never a rename.
 - A projection change must keep the [conformance suite](docs/conformance.md)
   passing for both the Go and the Starlark capability sets; a new projection must
   join it.

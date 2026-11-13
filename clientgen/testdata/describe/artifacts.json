@@ -1,0 +1,3747 @@
+{
+  "type": "describe-reply",
+  "id": "d1",
+  "capabilities": [
+    {
+      "name": "artifacts.activities",
+      "version": 1,
+      "title": "List the lab's activities",
+      "description": "Activities (sessions and runs) in the lab's store, newest commit first, with end status, each run's parent activity and code name, and the inputs each run recorded (role, target artifact, digest): the edges for walking an artifact's lineage. One page per call; repeat with the returned next cursor until it is empty.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "description": "max items; default 50, max 500"
+          },
+          "cursor": {
+            "type": "string",
+            "description": "opaque, from a previous next"
+          }
+        },
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "activities": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "activity id"
+                },
+                "kind": {
+                  "type": "string",
+                  "description": "activity kind: session, run, ..."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "activity name, when set"
+                },
+                "actor": {
+                  "type": "string",
+                  "description": "who ran the activity"
+                },
+                "owner": {
+                  "type": "string",
+                  "description": "activity owner"
+                },
+                "status": {
+                  "type": "string",
+                  "description": "end status; empty while still running"
+                },
+                "startedAt": {
+                  "type": "string",
+                  "description": "activity start time; empty (journals carry no wall clock)"
+                },
+                "endedAt": {
+                  "type": "string",
+                  "description": "activity end time; empty (journals carry no wall clock)"
+                },
+                "seq": {
+                  "type": "integer",
+                  "description": "lineage-journal sequence that wrote the activity"
+                },
+                "parent": {
+                  "type": "string",
+                  "description": "parent activity id (a run's session); empty at top level"
+                },
+                "code": {
+                  "type": "string",
+                  "description": "code that ran, e.g. apk.search-strings; empty for sessions"
+                },
+                "inputs": {
+                  "type": [
+                    "null",
+                    "array"
+                  ],
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "role": {
+                        "type": "string",
+                        "description": "input role in the run, e.g. package"
+                      },
+                      "target": {
+                        "type": "string",
+                        "description": "full input target ref, e.g. artifact:<id> or content:<digest>"
+                      },
+                      "artifact": {
+                        "type": "string",
+                        "description": "input artifact id; empty for content-only targets"
+                      },
+                      "digest": {
+                        "type": "string",
+                        "description": "input content digest, when recorded"
+                      }
+                    },
+                    "required": [
+                      "role",
+                      "target",
+                      "artifact",
+                      "digest"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "description": "the run's recorded inputs, in recorded order; empty for sessions and input-less runs"
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "name",
+                "actor",
+                "owner",
+                "status",
+                "startedAt",
+                "endedAt",
+                "seq",
+                "parent",
+                "code",
+                "inputs"
+              ],
+              "additionalProperties": false
+            },
+            "description": "one page of the lab's activities, newest commit first"
+          },
+          "next": {
+            "type": "string",
+            "description": "cursor for the next page; empty on the last"
+          }
+        },
+        "required": [
+          "activities"
+        ],
+        "additionalProperties": false
+      },
+      "effects": [
+        "read_only",
+        "idempotent"
+      ],
+      "tags": [
+        "artifacts"
+      ]
+    },
+    {
+      "name": "artifacts.checkpoints.list",
+      "version": 1,
+      "title": "List the lab's checkpoints",
+      "description": "The lab's timeline of observed events (an import) and attributed agent turn accounts, oldest first. Artifact references were checked against the lab's store when written; an agent's account is its interpretation, not a finding. Page with the next cursor.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "description": "max items; default 50, max 500"
+          },
+          "cursor": {
+            "type": "string",
+            "description": "opaque, from a previous next"
+          }
+        },
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "checkpoints": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "at": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "event": {
+                  "type": "string"
+                },
+                "actor": {
+                  "type": "string"
+                },
+                "chatId": {
+                  "type": "string"
+                },
+                "runId": {
+                  "type": "string"
+                },
+                "generationRunId": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                },
+                "artifacts": {
+                  "type": [
+                    "null",
+                    "array"
+                  ],
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "digest": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "name",
+                      "digest"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "promptTokens": {
+                  "type": "integer"
+                },
+                "completionTokens": {
+                  "type": "integer"
+                },
+                "reasoningTokens": {
+                  "type": "integer"
+                },
+                "cachedTokens": {
+                  "type": "integer"
+                },
+                "costUsd": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "id",
+                "at",
+                "kind",
+                "event",
+                "actor",
+                "status",
+                "text",
+                "artifacts"
+              ],
+              "additionalProperties": false
+            },
+            "description": "one page of the lab's timeline, oldest first"
+          },
+          "next": {
+            "type": "string",
+            "description": "cursor for the next page"
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "whether the lab is recording checkpoints"
+          }
+        },
+        "required": [
+          "checkpoints",
+          "enabled"
+        ],
+        "additionalProperties": false
+      },
+      "effects": [
+        "read_only",
+        "idempotent"
+      ],
+      "tags": [
+        "artifacts"
+      ]
+    },
+    {
+      "name": "artifacts.checkpoints.record",
+      "version": 1,
+      "title": "Record an agent's account of a turn",
+      "description": "For the subsystem that runs an agent's turns: add the agent's account of a turn to the lab's timeline, with every cited artifact checked against the lab's store, or with missing the fact that a turn ended without one. Does nothing while the lab has checkpoints turned off. Not an agent tool.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "chatId": {
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string",
+            "description": "the agent whose turn this is; empty with missing"
+          },
+          "text": {
+            "type": "string",
+            "description": "the agent's account of the turn, 1 to 8000 characters"
+          },
+          "artifactIds": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "artifacts the account cites; each must be in the lab, at most 32"
+          },
+          "status": {
+            "type": "string",
+            "description": "complete or incomplete"
+          },
+          "missing": {
+            "type": "boolean",
+            "description": "the turn ended with no usable account: record the gap instead"
+          },
+          "generationRunId": {
+            "type": "string"
+          },
+          "promptTokens": {
+            "type": "integer"
+          },
+          "completionTokens": {
+            "type": "integer"
+          },
+          "reasoningTokens": {
+            "type": "integer"
+          },
+          "cachedTokens": {
+            "type": "integer"
+          },
+          "costUsd": {
+            "type": "number"
+          }
+        },
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "recorded": {
+            "type": "boolean",
+            "description": "false when the lab has checkpoints turned off"
+          }
+        },
+        "required": [
+          "recorded"
+        ],
+        "additionalProperties": false
+      },
+      "tags": [
+        "subsystem-service"
+      ]
+    },
+    {
+      "name": "artifacts.checkpoints.set",
+      "version": 1,
+      "title": "Turn the lab's checkpoints on or off",
+      "description": "Turn recording of checkpoints on or off for this lab. Entries already in the timeline stay.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "record imports and agent turn accounts in this lab's timeline"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "additionalProperties": false
+      },
+      "effects": [
+        "idempotent"
+      ],
+      "tags": [
+        "artifacts"
+      ]
+    },
+    {
+      "name": "artifacts.claims",
+      "version": 1,
+      "title": "List the lab's claims",
+      "description": "Claims in the lab's store, newest commit first: kind, target, stored JSON value and producing activity. One page per call; repeat with the returned next cursor until it is empty.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "description": "max items; default 50, max 500"
+          },
+          "cursor": {
+            "type": "string",
+            "description": "opaque, from a previous next"
+          }
+        },
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "claims": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "claim id"
+                },
+                "kind": {
+                  "type": "string",
+                  "description": "claim kind, e.g. classify.type@1"
+                },
+                "target": {
+                  "type": "string",
+                  "description": "what the claim is about"
+                },
+                "value": {
+                  "type": "string",
+                  "description": "claim value as stored JSON text"
+                },
+                "activity": {
+                  "type": "string",
+                  "description": "activity that made the claim"
+                },
+                "seq": {
+                  "type": "integer",
+                  "description": "assertions-journal sequence that wrote the claim"
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "target",
+                "value",
+                "activity",
+                "seq"
+              ],
+              "additionalProperties": false
+            },
+            "description": "one page of the lab's claims, newest commit first"
+          },
+          "next": {
+            "type": "string",
+            "description": "cursor for the next page; empty on the last"
+          }
+        },
+        "required": [
+          "claims"
+        ],
+        "additionalProperties": false
+      },
+      "effects": [
+        "read_only",
+        "idempotent"
+      ],
+      "tags": [
+        "artifacts"
+      ]
+    },
+    {
+      "name": "artifacts.classify",
+      "version": 1,
+      "title": "Classify an artifact",
+      "description": "Classify one blob artifact's stored bytes and record a classify.type@1 claim. For artifacts that arrived unclassified or need a refreshed type. Empty primary means nothing was found; no claim is written.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "artifactId": {
+            "type": "string",
+            "description": "artifact id in the lab's store"
+          }
+        },
+        "required": [
+          "artifactId"
+        ],
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "artifactId": {
+            "type": "string"
+          },
+          "primary": {
+            "type": "string",
+            "description": "primary classify type; empty when the engine found nothing to say"
+          },
+          "typed": {
+            "type": "boolean",
+            "description": "whether a classify.type@1 claim was recorded"
+          }
+        },
+        "required": [
+          "artifactId",
+          "primary",
+          "typed"
+        ],
+        "additionalProperties": false
+      },
+      "tags": [
+        "artifacts",
+        "agent"
+      ]
+    },
+    {
+      "name": "artifacts.content",
+      "version": 1,
+      "title": "Read a window of a blob artifact",
+      "description": "Read at most 65536 bytes from a blob artifact. A tree has no single byte stream: read one of its files with artifacts.file.read. A table has none either: use artifacts.rows. Data is base64; offsets are bytes.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "artifactId": {
+            "type": "string",
+            "description": "artifact id in the lab's store"
+          },
+          "offset": {
+            "type": "integer",
+            "description": "byte offset"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "bytes to read, at most 65536"
+          }
+        },
+        "required": [
+          "artifactId",
+          "offset",
+          "limit"
+        ],
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "artifactId": {
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "form": {
+            "type": "string"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          },
+          "data": {
+            "type": "string",
+            "contentEncoding": "base64"
+          },
+          "eof": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "artifactId",
+          "digest",
+          "form",
+          "offset",
+          "total",
+          "data",
+          "eof"
+        ],
+        "additionalProperties": false
+      },
+      "effects": [
+        "read_only",
+        "idempotent"
+      ],
+      "tags": [
+        "artifacts"
+      ]
+    },
+    {
+      "name": "artifacts.file.read",
+      "version": 1,
+      "title": "Read one file of an artifact",
+      "description": "Read one file of a blob or tree artifact by path. Without length the whole file is returned, and one larger than limit is refused. With length, that many bytes (at most 8 MiB) are returned from offset, so a large file is read in pieces until eof. digest and size are always the whole file's.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "artifact": {
+            "type": "string",
+            "description": "artifact id"
+          },
+          "path": {
+            "type": "string",
+            "description": "file inside a tree; empty for a blob or single-file tree"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "for a whole read: the largest file to return, larger is refused; 0 is 64 MiB"
+          },
+          "offset": {
+            "type": "integer",
+            "description": "for a ranged read: byte offset to start at"
+          },
+          "length": {
+            "type": "integer",
+            "description": "set for a ranged read: bytes to return from offset, at most 8 MiB; the file's size is then no bar"
+          }
+        },
+        "required": [
+          "artifact"
+        ],
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "string",
+            "description": "base64",
+            "contentEncoding": "base64"
+          },
+          "digest": {
+            "type": "string",
+            "description": "the whole file's digest"
+          },
+          "size": {
+            "type": "integer",
+            "description": "the whole file's size"
+          },
+          "eof": {
+            "type": "boolean",
+            "description": "the read reached the end of the file"
+          }
+        },
+        "required": [
+          "data",
+          "digest",
+          "size",
+          "eof"
+        ],
+        "additionalProperties": false
+      },
+      "effects": [
+        "read_only",
+        "idempotent"
+      ],
+      "tags": [
+        "artifacts"
+      ]
+    },
+    {
+      "name": "artifacts.files",
+      "version": 1,
+      "title": "List an artifact's files",
+      "description": "Every file of a blob or tree artifact, with its size, digest and mode, nested trees flattened: with artifacts.file.read, enough to copy the whole artifact out.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "artifact": {
+            "type": "string",
+            "description": "artifact id"
+          }
+        },
+        "required": [
+          "artifact"
+        ],
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "form": {
+            "type": "string",
+            "description": "blob, tree or table"
+          },
+          "name": {
+            "type": "string",
+            "description": "the artifact's display name"
+          },
+          "digest": {
+            "type": "string",
+            "description": "the artifact's content digest"
+          },
+          "size": {
+            "type": "integer",
+            "description": "the artifact's total size"
+          },
+          "files": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "description": "the file's path in the artifact, with nested trees flattened"
+                },
+                "filePath": {
+                  "type": "string",
+                  "description": "the file's path inside the root artifact"
+                },
+                "size": {
+                  "type": "integer"
+                },
+                "digest": {
+                  "type": "string"
+                },
+                "mode": {
+                  "type": "integer",
+                  "description": "the file's permission bits"
+                }
+              },
+              "required": [
+                "path",
+                "filePath",
+                "size",
+                "digest",
+                "mode"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "form",
+          "name",
+          "digest",
+          "size",
+          "files"
+        ],
+        "additionalProperties": false
+      },
+      "effects": [
+        "read_only",
+        "idempotent"
+      ],
+      "tags": [
+        "artifacts"
+      ]
+    },
+    {
+      "name": "artifacts.findings-claims.create",
+      "version": 1,
+      "title": "State a finding",
+      "description": "For the findings subsystem. Not an agent tool.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string",
+            "description": "artifact id the finding is about"
+          },
+          "finding": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "claims": {
+                "type": [
+                  "null",
+                  "array"
+                ],
+                "items": {
+                  "type": "string"
+                },
+                "description": "claim kinds (propositions) the finding tracks, e.g. crash.native.observed"
+              },
+              "candidates": {
+                "type": [
+                  "null",
+                  "array"
+                ],
+                "items": {
+                  "type": "string"
+                },
+                "description": "candidate claim ids it was promoted from (a tool's own reports)"
+              },
+              "description": {
+                "type": "string"
+              },
+              "actor": {
+                "type": "string"
+              },
+              "createdAt": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title",
+              "claims",
+              "actor",
+              "createdAt"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "actor",
+          "subject",
+          "finding"
+        ],
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "tags": [
+        "subsystem-service"
+      ]
+    },
+    {
+      "name": "artifacts.findings-claims.current",
+      "version": 1,
+      "title": "Current findings",
+      "description": "For the findings subsystem. Not an agent tool.",
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "findings": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "ID": {
+                  "type": "string"
+                },
+                "Subject": {
+                  "type": "string"
+                },
+                "Seq": {
+                  "type": "integer"
+                },
+                "Value": {
+                  "type": "object",
+                  "properties": {
+                    "title": {
+                      "type": "string"
+                    },
+                    "claims": {
+                      "type": [
+                        "null",
+                        "array"
+                      ],
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "claim kinds (propositions) the finding tracks, e.g. crash.native.observed"
+                    },
+                    "candidates": {
+                      "type": [
+                        "null",
+                        "array"
+                      ],
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "candidate claim ids it was promoted from (a tool's own reports)"
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "actor": {
+                      "type": "string"
+                    },
+                    "createdAt": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "title",
+                    "claims",
+                    "actor",
+                    "createdAt"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "ID",
+                "Subject",
+                "Seq",
+                "Value"
+              ],
+              "additionalProperties": false
+            },
+            "description": "the lab's current findings, newest first"
+          }
+        },
+        "required": [
+          "findings"
+        ],
+        "additionalProperties": false
+      },
+      "effects": [
+        "read_only",
+        "idempotent"
+      ],
+      "tags": [
+        "subsystem-service"
+      ]
+    },
+    {
+      "name": "artifacts.findings-claims.link",
+      "version": 1,
+      "title": "Link a certificate to a finding",
+      "description": "For the findings subsystem. Not an agent tool.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "link": {
+            "type": "object",
+            "properties": {
+              "finding": {
+                "type": "string"
+              },
+              "certificate": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "finding",
+              "certificate"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "actor",
+          "link"
+        ],
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": false
+      },
+      "tags": [
+        "subsystem-service"
+      ]
+    },
+    {
+      "name": "artifacts.findings-claims.linked",
+      "version": 1,
+      "title": "Certificate to findings links",
+      "description": "For the findings subsystem. Not an agent tool.",
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "linked": {
+            "type": "object",
+            "description": "each linked certificate's artifact id to the findings linked to it",
+            "additionalProperties": {
+              "type": [
+                "null",
+                "array"
+              ],
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "required": [
+          "linked"
+        ],
+        "additionalProperties": false
+      },
+      "effects": [
+        "read_only",
+        "idempotent"
+      ],
+      "tags": [
+        "subsystem-service"
+      ]
+    },
+    {
+      "name": "artifacts.findings-claims.require",
+      "version": 1,
+      "title": "Check a claim is in the lab",
+      "description": "For the findings subsystem. Not an agent tool.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "claim id"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": false
+      },
+      "effects": [
+        "read_only",
+        "idempotent"
+      ],
+      "tags": [
+        "subsystem-service"
+      ]
+    },
+    {
+      "name": "artifacts.findings-claims.subject",
+      "version": 1,
+      "title": "Resolve a finding subject",
+      "description": "For the findings subsystem. Not an agent tool.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "artifact": {
+            "type": "string",
+            "description": "artifact id"
+          }
+        },
+        "required": [
+          "artifact"
+        ],
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "object",
+            "properties": {
+              "artifact": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "digest": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "artifact",
+              "digest"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "subject"
+        ],
+        "additionalProperties": false
+      },
+      "effects": [
+        "read_only",
+        "idempotent"
+      ],
+      "tags": [
+        "subsystem-service"
+      ]
+    },
+    {
+      "name": "artifacts.get",
+      "version": 1,
+      "title": "Get an artifact's identity and producer",
+      "description": "One artifact's form, digest, name, size and the capability that produced it, with a reference to its bytes when it is a blob.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "artifact": {
+            "type": "string",
+            "description": "artifact id"
+          }
+        },
+        "required": [
+          "artifact"
+        ],
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "form": {
+            "type": "string",
+            "description": "blob, tree or table"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "activityCode": {
+            "type": "string",
+            "description": "capability that produced the artifact, when known"
+          },
+          "name": {
+            "type": "string",
+            "description": "the artifact's display name"
+          },
+          "size": {
+            "type": "integer"
+          },
+          "reference": {
+            "type": [
+              "null",
+              "object"
+            ],
+            "properties": {
+              "type": {
+                "type": "string"
+              },
+              "owner": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "digest": {
+                "type": "string"
+              },
+              "size": {
+                "type": "integer"
+              },
+              "lab": {
+                "type": "string"
+              }
+            },
+            "description": "for a blob: a reference to its bytes, readable with artifacts.read",
+            "required": [
+              "type",
+              "owner",
+              "id",
+              "digest",
+              "size"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "form",
+          "digest",
+          "name",
+          "size"
+        ],
+        "additionalProperties": false
+      },
+      "effects": [
+        "read_only",
+        "idempotent"
+      ],
+      "tags": [
+        "artifacts"
+      ]
+    },
+    {
+      "name": "artifacts.import",
+      "version": 1,
+      "title": "Import files into the lab",
+      "description": "Import files into the lab's artifact store. A path is read on the machine the store runs on: a file becomes a blob artifact, a folder one tree artifact, bytes copied into the lab with their origin recorded. A caller that shares no disk with the store sends bytes instead, as name and data (base64). Each imported file is classified and the result recorded as a classify.type@1 claim; a classification failure never fails the import and is reported per item as classifyError. Paths inside the lab's own data are rejected. The report carries one result per item.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "paths": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "absolute paths on the machine the store runs on: a file becomes a blob artifact, a folder one tree artifact; max 64000 per call"
+          },
+          "path": {
+            "type": "string",
+            "description": "one such path, for a caller with one thing to import"
+          },
+          "name": {
+            "type": "string",
+            "description": "with data: the file name of bytes sent inline, for a caller that shares no disk with the store"
+          },
+          "data": {
+            "type": "string",
+            "description": "with name: the bytes to import as one blob artifact, base64",
+            "contentEncoding": "base64"
+          },
+          "files": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "file name the artifact gets"
+                },
+                "data": {
+                  "type": "string",
+                  "description": "the file's bytes, base64",
+                  "contentEncoding": "base64"
+                }
+              },
+              "required": [
+                "name",
+                "data"
+              ],
+              "additionalProperties": false
+            },
+            "description": "more files sent inline, each a blob artifact"
+          }
+        },
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "results": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "description": "the path that was requested, or the name of the bytes that were sent"
+                },
+                "artifact": {
+                  "type": [
+                    "null",
+                    "object"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "description": "artifact id (occurrence id)"
+                    },
+                    "name": {
+                      "type": "string",
+                      "description": "artifact name"
+                    },
+                    "digest": {
+                      "type": "string",
+                      "description": "content digest in the CAS"
+                    },
+                    "form": {
+                      "type": "string",
+                      "description": "content form: blob, tree or table"
+                    },
+                    "size": {
+                      "type": "integer",
+                      "description": "content size in bytes"
+                    },
+                    "activity": {
+                      "type": "string",
+                      "description": "activity that produced the artifact"
+                    },
+                    "seq": {
+                      "type": "integer",
+                      "description": "artifacts-journal sequence that wrote the artifact"
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "description": "artifact creation time, RFC 3339 UTC; empty (journals carry no wall clock)"
+                    }
+                  },
+                  "description": "the artifact the path became; absent when it failed",
+                  "required": [
+                    "id",
+                    "name",
+                    "digest",
+                    "form",
+                    "size",
+                    "activity",
+                    "seq",
+                    "createdAt"
+                  ],
+                  "additionalProperties": false
+                },
+                "error": {
+                  "type": "string",
+                  "description": "why this path was not imported; empty on success"
+                },
+                "type": {
+                  "type": "string",
+                  "description": "classify primary type claimed for the artifact; empty when unclassified"
+                },
+                "classifyError": {
+                  "type": "string",
+                  "description": "why classifying an imported file failed; the artifact is imported regardless"
+                },
+                "checkpointError": {
+                  "type": "string",
+                  "description": "why an enabled host checkpoint could not be recorded; the artifact was still imported"
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "additionalProperties": false
+            },
+            "description": "one result per requested path, in request order"
+          },
+          "imported": {
+            "type": "integer",
+            "description": "how many paths became artifacts"
+          },
+          "failed": {
+            "type": "integer",
+            "description": "how many paths did not import"
+          }
+        },
+        "required": [
+          "results",
+          "imported",
+          "failed"
+        ],
+        "additionalProperties": false
+      },
+      "tags": [
+        "artifacts"
+      ],
+      "long": true
+    },
+    {
+      "name": "artifacts.lineage",
+      "version": 1,
+      "title": "Walk an artifact's lineage",
+      "description": "Lineage of one artifact: ancestors (direction up, default) or descendants (down), with the artifacts, producing activities (including each run's recorded inputs) and derivation edges. Depth bounds the walk; 0 goes to the ends.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "artifactId": {
+            "type": "string",
+            "description": "artifact whose lineage to walk"
+          },
+          "direction": {
+            "type": "string",
+            "description": "up (ancestors, default) or down (descendants)"
+          },
+          "depth": {
+            "type": "integer",
+            "description": "max derivation depth; 0 walks to the ends"
+          }
+        },
+        "required": [
+          "artifactId"
+        ],
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "string"
+          },
+          "direction": {
+            "type": "string"
+          },
+          "artifacts": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "artifact id (occurrence id)"
+                },
+                "name": {
+                  "type": "string",
+                  "description": "artifact name"
+                },
+                "digest": {
+                  "type": "string",
+                  "description": "content digest in the CAS"
+                },
+                "form": {
+                  "type": "string",
+                  "description": "content form: blob, tree or table"
+                },
+                "size": {
+                  "type": "integer",
+                  "description": "content size in bytes"
+                },
+                "activity": {
+                  "type": "string",
+                  "description": "activity that produced the artifact"
+                },
+                "seq": {
+                  "type": "integer",
+                  "description": "artifacts-journal sequence that wrote the artifact"
+                },
+                "createdAt": {
+                  "type": "string",
+                  "description": "artifact creation time, RFC 3339 UTC; empty (journals carry no wall clock)"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "digest",
+                "form",
+                "size",
+                "activity",
+                "seq",
+                "createdAt"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "activities": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "activity id"
+                },
+                "kind": {
+                  "type": "string",
+                  "description": "activity kind: session, run, ..."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "activity name, when set"
+                },
+                "actor": {
+                  "type": "string",
+                  "description": "who ran the activity"
+                },
+                "owner": {
+                  "type": "string",
+                  "description": "activity owner"
+                },
+                "status": {
+                  "type": "string",
+                  "description": "end status; empty while still running"
+                },
+                "startedAt": {
+                  "type": "string",
+                  "description": "activity start time; empty (journals carry no wall clock)"
+                },
+                "endedAt": {
+                  "type": "string",
+                  "description": "activity end time; empty (journals carry no wall clock)"
+                },
+                "seq": {
+                  "type": "integer",
+                  "description": "lineage-journal sequence that wrote the activity"
+                },
+                "parent": {
+                  "type": "string",
+                  "description": "parent activity id (a run's session); empty at top level"
+                },
+                "code": {
+                  "type": "string",
+                  "description": "code that ran, e.g. apk.search-strings; empty for sessions"
+                },
+                "inputs": {
+                  "type": [
+                    "null",
+                    "array"
+                  ],
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "role": {
+                        "type": "string",
+                        "description": "input role in the run, e.g. package"
+                      },
+                      "target": {
+                        "type": "string",
+                        "description": "full input target ref, e.g. artifact:<id> or content:<digest>"
+                      },
+                      "artifact": {
+                        "type": "string",
+                        "description": "input artifact id; empty for content-only targets"
+                      },
+                      "digest": {
+                        "type": "string",
+                        "description": "input content digest, when recorded"
+                      }
+                    },
+                    "required": [
+                      "role",
+                      "target",
+                      "artifact",
+                      "digest"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "description": "the run's recorded inputs, in recorded order; empty for sessions and input-less runs"
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "name",
+                "actor",
+                "owner",
+                "status",
+                "startedAt",
+                "endedAt",
+                "seq",
+                "parent",
+                "code",
+                "inputs"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "edges": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "from": {
+                  "type": "string",
+                  "description": "input target ref"
+                },
+                "to": {
+                  "type": "string",
+                  "description": "derived artifact id"
+                },
+                "activity": {
+                  "type": "string",
+                  "description": "deriving activity id"
+                }
+              },
+              "required": [
+                "from",
+                "to",
+                "activity"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "root",
+          "direction",
+          "artifacts",
+          "activities",
+          "edges"
+        ],
+        "additionalProperties": false
+      },
+      "effects": [
+        "read_only",
+        "idempotent"
+      ],
+      "tags": [
+        "artifacts",
+        "agent"
+      ]
+    },
+    {
+      "name": "artifacts.list",
+      "version": 1,
+      "title": "List the lab's artifacts",
+      "description": "Artifacts in the lab's store, newest commit first: id, name, content digest, form, size and producing activity. One page per call; repeat with the returned next cursor until it is empty. items holds a reference to each blob on the page, for artifacts.read.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "keep only artifacts of this reference type: artifact.blob, artifact.tree or artifact.table"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "max items; default 50, max 500"
+          },
+          "cursor": {
+            "type": "string",
+            "description": "opaque, from a previous next"
+          }
+        },
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "artifacts": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "artifact id (occurrence id)"
+                },
+                "name": {
+                  "type": "string",
+                  "description": "artifact name"
+                },
+                "digest": {
+                  "type": "string",
+                  "description": "content digest in the CAS"
+                },
+                "form": {
+                  "type": "string",
+                  "description": "content form: blob, tree or table"
+                },
+                "size": {
+                  "type": "integer",
+                  "description": "content size in bytes"
+                },
+                "activity": {
+                  "type": "string",
+                  "description": "activity that produced the artifact"
+                },
+                "seq": {
+                  "type": "integer",
+                  "description": "artifacts-journal sequence that wrote the artifact"
+                },
+                "createdAt": {
+                  "type": "string",
+                  "description": "artifact creation time, RFC 3339 UTC; empty (journals carry no wall clock)"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "digest",
+                "form",
+                "size",
+                "activity",
+                "seq",
+                "createdAt"
+              ],
+              "additionalProperties": false
+            },
+            "description": "one page of the lab's artifacts, newest commit first"
+          },
+          "next": {
+            "type": "string",
+            "description": "cursor for the next page; empty on the last"
+          },
+          "items": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string"
+                },
+                "owner": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "digest": {
+                  "type": "string"
+                },
+                "size": {
+                  "type": "integer"
+                },
+                "lab": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "owner",
+                "id",
+                "digest",
+                "size"
+              ],
+              "additionalProperties": false
+            },
+            "description": "a reference to each blob artifact on this page, readable with artifacts.read"
+          }
+        },
+        "required": [
+          "artifacts",
+          "items"
+        ],
+        "additionalProperties": false
+      },
+      "effects": [
+        "read_only",
+        "idempotent"
+      ],
+      "tags": [
+        "artifacts"
+      ]
+    },
+    {
+      "name": "artifacts.overview",
+      "version": 1,
+      "title": "Get the lab's store at a glance",
+      "description": "The lab's store at a glance: artifact count, content items and bytes, activity and claim counts, the store commit sequence and when it last changed.",
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "storeId": {
+            "type": "string",
+            "description": "id of the lab's artifact store"
+          },
+          "storeSeq": {
+            "type": "integer",
+            "description": "lab store artifacts-journal sequence"
+          },
+          "artifacts": {
+            "type": "integer",
+            "description": "number of artifact publications (occurrences) in the lab store"
+          },
+          "contentItems": {
+            "type": "integer",
+            "description": "number of content snapshots in the lab store"
+          },
+          "contentBytes": {
+            "type": "integer",
+            "description": "total logical bytes of the lab store's snapshots"
+          },
+          "activities": {
+            "type": "integer",
+            "description": "number of activities (sessions and runs) in the lab store"
+          },
+          "claims": {
+            "type": "integer",
+            "description": "number of claims in the lab store"
+          },
+          "lastActivityAt": {
+            "type": "string",
+            "description": "when the store last changed, RFC 3339 UTC; empty when it never has"
+          }
+        },
+        "required": [
+          "storeId",
+          "storeSeq",
+          "artifacts",
+          "contentItems",
+          "contentBytes",
+          "activities",
+          "claims",
+          "lastActivityAt"
+        ],
+        "additionalProperties": false
+      },
+      "effects": [
+        "read_only",
+        "idempotent"
+      ],
+      "tags": [
+        "artifacts"
+      ]
+    },
+    {
+      "name": "artifacts.page.detail",
+      "version": 1,
+      "title": "The Artifacts page's view of one artifact",
+      "description": "For the Artifacts page: what it shows, ready to show.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "artifactId": {
+            "type": "string",
+            "description": "artifact id in the lab's store"
+          }
+        },
+        "required": [
+          "artifactId"
+        ],
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "description": "the artifact's classify type, or its form when it has none"
+          },
+          "form": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "types": {
+            "type": "string",
+            "description": "every classify type claimed for the artifact"
+          },
+          "producedBy": {
+            "type": "string",
+            "description": "what produced the artifact, in words"
+          },
+          "activity": {
+            "type": "string",
+            "description": "the producing activity's id"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "lineage": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "relation": {
+                  "type": "string",
+                  "description": "Made from, for an ancestor; Used to make, for a descendant"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "size": {
+                  "type": "integer"
+                },
+                "by": {
+                  "type": "string",
+                  "description": "what produced that artifact"
+                },
+                "id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "relation",
+                "name",
+                "type",
+                "size",
+                "by",
+                "id"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "noLineage": {
+            "type": "string",
+            "description": "set when the artifact has no recorded lineage"
+          },
+          "preview": {
+            "type": [
+              "null",
+              "object"
+            ],
+            "properties": {
+              "type": {
+                "type": "string"
+              },
+              "owner": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "digest": {
+                "type": "string"
+              },
+              "size": {
+                "type": "integer"
+              },
+              "lab": {
+                "type": "string"
+              }
+            },
+            "description": "a blob's bytes, by reference",
+            "required": [
+              "type",
+              "owner",
+              "id",
+              "digest",
+              "size"
+            ],
+            "additionalProperties": false
+          },
+          "files": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "size": {
+                  "type": "integer"
+                },
+                "digest": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "size",
+                "digest"
+              ],
+              "additionalProperties": false
+            },
+            "description": "a tree's files, the first 200"
+          },
+          "filesNote": {
+            "type": "string",
+            "description": "how many files the tree holds"
+          },
+          "noPreview": {
+            "type": "string",
+            "description": "why there is nothing to preview"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "type",
+          "form",
+          "size",
+          "digest",
+          "types",
+          "producedBy",
+          "activity",
+          "seq"
+        ],
+        "additionalProperties": false
+      },
+      "effects": [
+        "read_only",
+        "idempotent"
+      ]
+    },
+    {
+      "name": "artifacts.page.list",
+      "version": 1,
+      "title": "The Artifacts page's list",
+      "description": "For the Artifacts page: what it shows, ready to show.",
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "artifacts": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "description": "the artifact's classify type, or its form when it has none"
+                },
+                "form": {
+                  "type": "string"
+                },
+                "size": {
+                  "type": "integer"
+                },
+                "digest": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "type",
+                "form",
+                "size",
+                "digest"
+              ],
+              "additionalProperties": false
+            },
+            "description": "every artifact in the lab, newest first"
+          },
+          "total": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "artifacts",
+          "total"
+        ],
+        "additionalProperties": false
+      },
+      "effects": [
+        "read_only",
+        "idempotent"
+      ]
+    },
+    {
+      "name": "artifacts.read",
+      "version": 1,
+      "title": "Read content by reference",
+      "description": "The read every owner of references has. id is a blob artifact's id, or <artifact id>/<path> for one file of a tree. Returns at most 1 MiB from offset, with the whole content's size and digest. Only content of the call's own lab is found.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "string",
+            "contentEncoding": "base64"
+          },
+          "eof": {
+            "type": "boolean"
+          },
+          "size": {
+            "type": "integer"
+          },
+          "digest": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "data",
+          "eof",
+          "size",
+          "digest"
+        ],
+        "additionalProperties": false
+      },
+      "effects": [
+        "read_only",
+        "idempotent"
+      ],
+      "tags": [
+        "artifacts"
+      ]
+    },
+    {
+      "name": "artifacts.rows",
+      "version": 1,
+      "title": "Read a table artifact's rows",
+      "description": "Read at most 1000 rows of a table artifact, in stored order, with its schema (key and columns) and total row count. Offsets are row indexes.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "artifactId": {
+            "type": "string",
+            "description": "table artifact id in the lab's store"
+          },
+          "offset": {
+            "type": "integer",
+            "description": "row offset"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "rows to read, at most 1000"
+          }
+        },
+        "required": [
+          "artifactId",
+          "offset",
+          "limit"
+        ],
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "artifactId": {
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "schemaId": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "version": {
+                "type": "integer"
+              },
+              "key": {
+                "type": [
+                  "null",
+                  "array"
+                ],
+                "items": {
+                  "type": "string"
+                }
+              },
+              "columns": {
+                "type": [
+                  "null",
+                  "array"
+                ],
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    },
+                    "key": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "type"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "schemaId",
+              "name",
+              "version",
+              "key",
+              "columns"
+            ],
+            "additionalProperties": false
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          },
+          "rows": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "eof": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "artifactId",
+          "digest",
+          "schema",
+          "offset",
+          "total",
+          "rows",
+          "eof"
+        ],
+        "additionalProperties": false
+      },
+      "effects": [
+        "read_only",
+        "idempotent"
+      ],
+      "tags": [
+        "artifacts"
+      ]
+    },
+    {
+      "name": "artifacts.runs.find",
+      "version": 1,
+      "title": "Find the run a deterministic run would reuse",
+      "description": "For subsystems: before doing the work, ask whether artifacts.runs.record-tree with deterministic would reuse an earlier run for the same code, params and input content. found false means the work must be done. It records nothing. Not an agent tool.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "capability": {
+            "type": "string",
+            "description": "capability name the run is recorded under"
+          },
+          "codeKind": {
+            "type": "string",
+            "description": "what kind of code ran: builtin (the default) for a procedure of the calling subsystem, worker for a worker definition"
+          },
+          "codeName": {
+            "type": "string",
+            "description": "the code's own name when it is not the capability, such as a worker definition's id"
+          },
+          "codeVersion": {
+            "type": "string",
+            "description": "code version label, such as a worker definition's digest; 1 when empty"
+          },
+          "noInputs": {
+            "type": "boolean",
+            "description": "an acquisition run with no inputs"
+          },
+          "params": true,
+          "inputs": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "role": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "role",
+                "id"
+              ],
+              "additionalProperties": false
+            },
+            "description": "declared run inputs by role; an empty id is an absent optional input; the first present is the primary"
+          },
+          "outputName": {
+            "type": "string",
+            "description": "the tree output's name, as artifacts.runs.record-tree would be given it"
+          },
+          "blobs": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "the blob output names that call would use, so outputs is keyed the same way"
+          }
+        },
+        "required": [
+          "capability",
+          "outputName"
+        ],
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "found": {
+            "type": "boolean"
+          },
+          "artifactId": {
+            "type": "string",
+            "description": "the tree artifact"
+          },
+          "runId": {
+            "type": "string",
+            "description": "the run that produced it"
+          },
+          "reused": {
+            "type": "boolean",
+            "description": "an identical earlier run's outputs; nothing was written"
+          },
+          "outputs": {
+            "type": "object",
+            "description": "every output of the run by the name the caller gave it, the tree included",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "found",
+          "artifactId",
+          "runId",
+          "reused",
+          "outputs"
+        ],
+        "additionalProperties": false
+      },
+      "effects": [
+        "read_only",
+        "idempotent"
+      ],
+      "tags": [
+        "subsystem-service"
+      ]
+    },
+    {
+      "name": "artifacts.runs.record",
+      "version": 1,
+      "title": "Record a derivation of blobs from an artifact",
+      "description": "For subsystems: record one deterministic derivation (an input blob artifact plus the output bytes computed from it) as a run in the lab, with lineage. An identical earlier run is reused and its bytes returned. Not an agent tool.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "artifact": {
+            "type": "string",
+            "description": "input artifact id"
+          },
+          "code": {
+            "type": "string",
+            "description": "capability name the run is recorded under"
+          },
+          "version": {
+            "type": "string",
+            "description": "code version label; change it whenever the output could change"
+          },
+          "params": {
+            "description": "run parameters beside the input"
+          },
+          "suffixes": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "output name suffixes, in order; the first names the run output"
+          },
+          "outputs": {
+            "type": "object",
+            "description": "computed output bytes per suffix, base64; ignored when an identical run is reused",
+            "additionalProperties": {
+              "type": "string",
+              "contentEncoding": "base64"
+            }
+          },
+          "maxBytes": {
+            "type": "integer",
+            "description": "input size bound; 0 is unbounded"
+          }
+        },
+        "required": [
+          "artifact",
+          "code",
+          "version",
+          "suffixes",
+          "outputs"
+        ],
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "outputs": {
+            "type": "object",
+            "description": "checked-in output artifact per suffix",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "run": {
+            "type": "string",
+            "description": "run id that produced them"
+          },
+          "reused": {
+            "type": "boolean",
+            "description": "an identical earlier run's outputs were reused"
+          },
+          "data": {
+            "type": "object",
+            "description": "on reuse, the checked-in output bytes per suffix, base64",
+            "additionalProperties": {
+              "type": "string",
+              "contentEncoding": "base64"
+            }
+          }
+        },
+        "required": [
+          "outputs",
+          "run",
+          "reused"
+        ],
+        "additionalProperties": false
+      },
+      "tags": [
+        "subsystem-service"
+      ],
+      "long": true
+    },
+    {
+      "name": "artifacts.runs.record-artifacts",
+      "version": 1,
+      "title": "Record a run with one blob or table output",
+      "description": "For subsystems: record one analysis run over several input artifacts by role, with a blob or table output. A run with inputs is deterministic and reused when identical; one with noInputs is an acquisition and never reused. Not an agent tool.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "capability": {
+            "type": "string",
+            "description": "capability name the run is recorded under"
+          },
+          "codeKind": {
+            "type": "string",
+            "description": "what kind of code ran: builtin (the default) for a procedure of the calling subsystem, worker for a worker definition"
+          },
+          "codeName": {
+            "type": "string",
+            "description": "the code's own name when it is not the capability, such as a worker definition's id"
+          },
+          "codeVersion": {
+            "type": "string",
+            "description": "code version label, such as a worker definition's digest; 1 when empty"
+          },
+          "noInputs": {
+            "type": "boolean",
+            "description": "an acquisition run with no inputs"
+          },
+          "params": true,
+          "inputs": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "role": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "role",
+                "id"
+              ],
+              "additionalProperties": false
+            },
+            "description": "declared run inputs by role; an empty id is an absent optional input; the first present is the primary"
+          },
+          "sessionName": {
+            "type": "string"
+          },
+          "outputName": {
+            "type": "string",
+            "description": "the one output's name, already derived from the primary input"
+          },
+          "table": {
+            "type": "boolean",
+            "description": "the output is a table, not a blob"
+          },
+          "blob": {
+            "type": "string",
+            "description": "base64",
+            "contentEncoding": "base64"
+          },
+          "tableSchema": {
+            "type": "string"
+          },
+          "tableKey": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "tableColumns": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "shape": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "shape"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "tableRows": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "capability",
+          "outputName"
+        ],
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "artifactId": {
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "reused": {
+            "type": "boolean"
+          },
+          "data": {
+            "type": "string",
+            "description": "blob output bytes, base64",
+            "contentEncoding": "base64"
+          },
+          "rows": {
+            "type": "integer",
+            "description": "table output row count"
+          }
+        },
+        "required": [
+          "artifactId",
+          "runId",
+          "reused"
+        ],
+        "additionalProperties": false
+      },
+      "tags": [
+        "subsystem-service"
+      ],
+      "long": true
+    },
+    {
+      "name": "artifacts.runs.record-tree",
+      "version": 1,
+      "title": "Record a run whose output is a folder",
+      "description": "For subsystems: record one run over input artifacts whose output is a folder of files, checked in as one tree artifact, with any further blob outputs of the same run. The tree is sent as files, or named as a folder on the machine the store runs on. With deterministic, an identical earlier run is reused and nothing is read or written. Not an agent tool.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "capability": {
+            "type": "string",
+            "description": "capability name the run is recorded under"
+          },
+          "codeKind": {
+            "type": "string",
+            "description": "what kind of code ran: builtin (the default) for a procedure of the calling subsystem, worker for a worker definition"
+          },
+          "codeName": {
+            "type": "string",
+            "description": "the code's own name when it is not the capability, such as a worker definition's id"
+          },
+          "codeVersion": {
+            "type": "string",
+            "description": "code version label, such as a worker definition's digest; 1 when empty"
+          },
+          "noInputs": {
+            "type": "boolean",
+            "description": "an acquisition run with no inputs"
+          },
+          "params": true,
+          "inputs": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "role": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "role",
+                "id"
+              ],
+              "additionalProperties": false
+            },
+            "description": "declared run inputs by role; an empty id is an absent optional input; the first present is the primary"
+          },
+          "deterministic": {
+            "type": "boolean",
+            "description": "reuse an identical earlier run: same code, params and input content"
+          },
+          "sessionName": {
+            "type": "string"
+          },
+          "outputName": {
+            "type": "string",
+            "description": "the tree output's name; a name starting with a dot is appended to the primary input's name"
+          },
+          "files": {
+            "type": "object",
+            "description": "the tree's files by slash path, base64",
+            "additionalProperties": {
+              "type": "string",
+              "contentEncoding": "base64"
+            }
+          },
+          "dir": {
+            "type": "string",
+            "description": "instead of files: the absolute path, on the machine the store runs on, of a folder whose files are the tree"
+          },
+          "blobs": {
+            "type": "object",
+            "description": "further blob outputs of the same run by name or .suffix, base64",
+            "additionalProperties": {
+              "type": "string",
+              "contentEncoding": "base64"
+            }
+          },
+          "blobPaths": {
+            "type": "object",
+            "description": "further blob outputs by name or .suffix, each the absolute path of a file on the machine the store runs on",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "capability",
+          "outputName"
+        ],
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "artifactId": {
+            "type": "string",
+            "description": "the tree artifact"
+          },
+          "runId": {
+            "type": "string",
+            "description": "the run that produced it"
+          },
+          "reused": {
+            "type": "boolean",
+            "description": "an identical earlier run's outputs; nothing was written"
+          },
+          "outputs": {
+            "type": "object",
+            "description": "every output of the run by the name the caller gave it, the tree included",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "artifactId",
+          "runId",
+          "reused",
+          "outputs"
+        ],
+        "additionalProperties": false
+      },
+      "tags": [
+        "subsystem-service"
+      ],
+      "long": true
+    },
+    {
+      "name": "artifacts.search",
+      "version": 1,
+      "title": "Search the lab's artifacts",
+      "description": "Search the lab's artifacts: substring text over name, id, digest and tree-entry paths, exact form (blob, tree or table), and primary classify type. Returns one page (newest commit first) with each hit's classify types and what matched, plus the total and form and type facets over the full matched set; repeat with the same filters and the returned next cursor for the following page.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "substring of the artifact name, id, digest or a tree entry path"
+          },
+          "form": {
+            "type": "string",
+            "description": "blob, tree or table"
+          },
+          "type": {
+            "type": "string",
+            "description": "primary classify type, e.g. android.apk"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "max items; default 50, max 500"
+          },
+          "cursor": {
+            "type": "string",
+            "description": "opaque, from a previous next"
+          }
+        },
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "artifacts": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "artifact id (occurrence id)"
+                },
+                "name": {
+                  "type": "string",
+                  "description": "artifact name"
+                },
+                "digest": {
+                  "type": "string",
+                  "description": "content digest in the CAS"
+                },
+                "form": {
+                  "type": "string",
+                  "description": "content form: blob, tree or table"
+                },
+                "size": {
+                  "type": "integer",
+                  "description": "content size in bytes"
+                },
+                "activity": {
+                  "type": "string",
+                  "description": "activity that produced the artifact"
+                },
+                "seq": {
+                  "type": "integer",
+                  "description": "artifacts-journal sequence that wrote the artifact"
+                },
+                "createdAt": {
+                  "type": "string",
+                  "description": "artifact creation time, RFC 3339 UTC; empty (journals carry no wall clock)"
+                },
+                "types": {
+                  "type": [
+                    "null",
+                    "array"
+                  ],
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "classify.type primary types recorded for the artifact"
+                },
+                "match": {
+                  "type": "string",
+                  "description": "what matched the text: name, id, digest, or tree:<path>"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "digest",
+                "form",
+                "size",
+                "activity",
+                "seq",
+                "createdAt",
+                "types"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "total": {
+            "type": "integer"
+          },
+          "forms": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "value",
+                "count"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "types": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "value",
+                "count"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "next": {
+            "type": "string",
+            "description": "cursor for the next page; empty on the last"
+          }
+        },
+        "required": [
+          "artifacts",
+          "total",
+          "forms",
+          "types"
+        ],
+        "additionalProperties": false
+      },
+      "effects": [
+        "read_only",
+        "idempotent"
+      ],
+      "tags": [
+        "artifacts",
+        "agent"
+      ]
+    },
+    {
+      "name": "artifacts.snapshot",
+      "version": 1,
+      "title": "Snapshot the lab's inventory",
+      "description": "Build an immutable SQLite inventory of the lab at its current store sequence (artifacts, activities, claims, run inputs and tree entries) and publish it as a blob artifact with producer artifacts.snapshot. No run activity is created. Labs over 100000 artifacts or 2000000 tree rows fail instead of copying unbounded.",
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "artifact": {
+            "type": [
+              "null",
+              "object"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "artifact id (occurrence id)"
+              },
+              "name": {
+                "type": "string",
+                "description": "artifact name"
+              },
+              "digest": {
+                "type": "string",
+                "description": "content digest in the CAS"
+              },
+              "form": {
+                "type": "string",
+                "description": "content form: blob, tree or table"
+              },
+              "size": {
+                "type": "integer",
+                "description": "content size in bytes"
+              },
+              "activity": {
+                "type": "string",
+                "description": "activity that produced the artifact"
+              },
+              "seq": {
+                "type": "integer",
+                "description": "artifacts-journal sequence that wrote the artifact"
+              },
+              "createdAt": {
+                "type": "string",
+                "description": "artifact creation time, RFC 3339 UTC; empty (journals carry no wall clock)"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "digest",
+              "form",
+              "size",
+              "activity",
+              "seq",
+              "createdAt"
+            ],
+            "additionalProperties": false
+          },
+          "artifacts": {
+            "type": "integer"
+          },
+          "treeRows": {
+            "type": "integer"
+          },
+          "storeSeq": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "artifact",
+          "artifacts",
+          "treeRows",
+          "storeSeq"
+        ],
+        "additionalProperties": false
+      },
+      "tags": [
+        "artifacts"
+      ],
+      "long": true
+    },
+    {
+      "name": "artifacts.store.ancestors",
+      "version": 1,
+      "title": "Recorded artifact ancestors",
+      "description": "For subsystems. Not an agent tool.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "roots": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "artifact ids to walk up from"
+          }
+        },
+        "required": [
+          "roots"
+        ],
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "ancestors": {
+            "type": "object",
+            "description": "every recorded ancestor of the roots by artifact id, roots excluded",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "artifact id (occurrence id)"
+                },
+                "name": {
+                  "type": "string",
+                  "description": "artifact name"
+                },
+                "digest": {
+                  "type": "string",
+                  "description": "content digest in the CAS"
+                },
+                "form": {
+                  "type": "string",
+                  "description": "content form: blob, tree or table"
+                },
+                "size": {
+                  "type": "integer",
+                  "description": "content size in bytes"
+                },
+                "activity": {
+                  "type": "string",
+                  "description": "activity that produced the artifact"
+                },
+                "seq": {
+                  "type": "integer",
+                  "description": "artifacts-journal sequence that wrote the artifact"
+                },
+                "createdAt": {
+                  "type": "string",
+                  "description": "artifact creation time, RFC 3339 UTC; empty (journals carry no wall clock)"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "digest",
+                "form",
+                "size",
+                "activity",
+                "seq",
+                "createdAt"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "ancestors"
+        ],
+        "additionalProperties": false
+      },
+      "effects": [
+        "read_only",
+        "idempotent"
+      ],
+      "tags": [
+        "subsystem-service"
+      ]
+    },
+    {
+      "name": "artifacts.store.artifact",
+      "version": 1,
+      "title": "One artifact record",
+      "description": "For subsystems. Not an agent tool.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "artifact": {
+            "type": "string",
+            "description": "artifact id"
+          }
+        },
+        "required": [
+          "artifact"
+        ],
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "artifact": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "artifact id (occurrence id)"
+              },
+              "name": {
+                "type": "string",
+                "description": "artifact name"
+              },
+              "digest": {
+                "type": "string",
+                "description": "content digest in the CAS"
+              },
+              "form": {
+                "type": "string",
+                "description": "content form: blob, tree or table"
+              },
+              "size": {
+                "type": "integer",
+                "description": "content size in bytes"
+              },
+              "activity": {
+                "type": "string",
+                "description": "activity that produced the artifact"
+              },
+              "seq": {
+                "type": "integer",
+                "description": "artifacts-journal sequence that wrote the artifact"
+              },
+              "createdAt": {
+                "type": "string",
+                "description": "artifact creation time, RFC 3339 UTC; empty (journals carry no wall clock)"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "digest",
+              "form",
+              "size",
+              "activity",
+              "seq",
+              "createdAt"
+            ],
+            "additionalProperties": false
+          },
+          "ok": {
+            "type": "boolean",
+            "description": "false when the lab has no such artifact"
+          }
+        },
+        "required": [
+          "artifact",
+          "ok"
+        ],
+        "additionalProperties": false
+      },
+      "effects": [
+        "read_only",
+        "idempotent"
+      ],
+      "tags": [
+        "subsystem-service"
+      ]
+    },
+    {
+      "name": "artifacts.store.artifacts-since",
+      "version": 1,
+      "title": "Artifacts published after a sequence",
+      "description": "For subsystems. Not an agent tool.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "seq": {
+            "type": "integer",
+            "description": "a sequence artifacts.store.seq returned"
+          }
+        },
+        "required": [
+          "seq"
+        ],
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "artifacts": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "artifact id (occurrence id)"
+                },
+                "name": {
+                  "type": "string",
+                  "description": "artifact name"
+                },
+                "digest": {
+                  "type": "string",
+                  "description": "content digest in the CAS"
+                },
+                "form": {
+                  "type": "string",
+                  "description": "content form: blob, tree or table"
+                },
+                "size": {
+                  "type": "integer",
+                  "description": "content size in bytes"
+                },
+                "activity": {
+                  "type": "string",
+                  "description": "activity that produced the artifact"
+                },
+                "seq": {
+                  "type": "integer",
+                  "description": "artifacts-journal sequence that wrote the artifact"
+                },
+                "createdAt": {
+                  "type": "string",
+                  "description": "artifact creation time, RFC 3339 UTC; empty (journals carry no wall clock)"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "digest",
+                "form",
+                "size",
+                "activity",
+                "seq",
+                "createdAt"
+              ],
+              "additionalProperties": false
+            },
+            "description": "every artifact published after seq, oldest first"
+          }
+        },
+        "required": [
+          "artifacts"
+        ],
+        "additionalProperties": false
+      },
+      "effects": [
+        "read_only",
+        "idempotent"
+      ],
+      "tags": [
+        "subsystem-service"
+      ]
+    },
+    {
+      "name": "artifacts.store.classify-type",
+      "version": 1,
+      "title": "An artifact's classify type claim",
+      "description": "For subsystems. Not an agent tool.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "artifact": {
+            "type": "string",
+            "description": "artifact id"
+          }
+        },
+        "required": [
+          "artifact"
+        ],
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string"
+              },
+              "level": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "additionalProperties": false
+          },
+          "ok": {
+            "type": "boolean",
+            "description": "false when the artifact has no current classify type"
+          }
+        },
+        "required": [
+          "subject",
+          "ok"
+        ],
+        "additionalProperties": false
+      },
+      "effects": [
+        "read_only",
+        "idempotent"
+      ],
+      "tags": [
+        "subsystem-service"
+      ]
+    },
+    {
+      "name": "artifacts.store.emits",
+      "version": 1,
+      "title": "Content types agent capabilities emit",
+      "description": "For subsystems: in Labs, the content types the chat agent's capabilities declared they emit. A subsystem can't see other capabilities' declarations, so this always fails with unavailable until the host offers them. Not an agent tool.",
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "emits": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "emits"
+        ],
+        "additionalProperties": false
+      },
+      "effects": [
+        "read_only",
+        "idempotent"
+      ],
+      "tags": [
+        "subsystem-service"
+      ]
+    },
+    {
+      "name": "artifacts.store.producer-kind",
+      "version": 1,
+      "title": "An artifact's producer code kind",
+      "description": "For subsystems. Not an agent tool.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "artifact": {
+            "type": "string",
+            "description": "artifact id"
+          }
+        },
+        "required": [
+          "artifact"
+        ],
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "ok": {
+            "type": "boolean",
+            "description": "false when no run produced the artifact"
+          }
+        },
+        "required": [
+          "kind",
+          "ok"
+        ],
+        "additionalProperties": false
+      },
+      "effects": [
+        "read_only",
+        "idempotent"
+      ],
+      "tags": [
+        "subsystem-service"
+      ]
+    },
+    {
+      "name": "artifacts.store.seq",
+      "version": 1,
+      "title": "The store's commit sequence",
+      "description": "For subsystems. Not an agent tool.",
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "seq": {
+            "type": "integer",
+            "description": "the store's artifacts-journal sequence"
+          }
+        },
+        "required": [
+          "seq"
+        ],
+        "additionalProperties": false
+      },
+      "effects": [
+        "read_only",
+        "idempotent"
+      ],
+      "tags": [
+        "subsystem-service"
+      ]
+    },
+    {
+      "name": "artifacts.store.table-schema",
+      "version": 1,
+      "title": "A table artifact's schema",
+      "description": "For subsystems. Not an agent tool.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "artifact": {
+            "type": "string",
+            "description": "artifact id"
+          }
+        },
+        "required": [
+          "artifact"
+        ],
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "schemaId": {
+                "type": "string"
+              },
+              "key": {
+                "type": [
+                  "null",
+                  "array"
+                ],
+                "items": {
+                  "type": "string"
+                }
+              },
+              "columns": {
+                "type": [
+                  "null",
+                  "array"
+                ],
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "type"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "schemaId",
+              "key",
+              "columns"
+            ],
+            "additionalProperties": false
+          },
+          "ok": {
+            "type": "boolean",
+            "description": "false when the artifact holds no table"
+          }
+        },
+        "required": [
+          "schema",
+          "ok"
+        ],
+        "additionalProperties": false
+      },
+      "effects": [
+        "read_only",
+        "idempotent"
+      ],
+      "tags": [
+        "subsystem-service"
+      ]
+    },
+    {
+      "name": "artifacts.store.types",
+      "version": 1,
+      "title": "Classify catalogue type names",
+      "description": "For subsystems. Not an agent tool.",
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "types": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "types"
+        ],
+        "additionalProperties": false
+      },
+      "effects": [
+        "read_only",
+        "idempotent"
+      ],
+      "tags": [
+        "subsystem-service"
+      ]
+    },
+    {
+      "name": "artifacts.store.write-delivery-claim",
+      "version": 1,
+      "title": "Write a delivery claim",
+      "description": "For subsystems: records on an artifact which frozen contract it satisfied, in which slot, and how. Not an agent tool.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "artifact": {
+            "type": "string",
+            "description": "artifact id"
+          },
+          "claim": {
+            "type": "object",
+            "properties": {
+              "ContractDigest": {
+                "type": "string"
+              },
+              "Slot": {
+                "type": "string"
+              },
+              "Acceptance": {
+                "type": "string"
+              },
+              "Clauses": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "ContractDigest",
+              "Slot",
+              "Acceptance",
+              "Clauses"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "artifact",
+          "claim"
+        ],
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": false
+      },
+      "tags": [
+        "subsystem-service"
+      ]
+    },
+    {
+      "name": "classify.types",
+      "version": 1,
+      "title": "List the types the classifier knows",
+      "description": "Every content type the classification engine can give an artifact, with its parents, MIME type, extensions and description: the built-in catalogue and the types contributed modules declare.",
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "types": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "parents": {
+                  "type": [
+                    "null",
+                    "array"
+                  ],
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "mime": {
+                  "type": "string"
+                },
+                "ext": {
+                  "type": [
+                    "null",
+                    "array"
+                  ],
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "priority": {
+                  "type": "integer"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "abstract": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "description": "every type the engine knows: the built-in ones and those contributed as classify.module@1"
+          }
+        },
+        "required": [
+          "types"
+        ],
+        "additionalProperties": false
+      },
+      "effects": [
+        "read_only",
+        "idempotent"
+      ],
+      "tags": [
+        "classify"
+      ]
+    }
+  ],
+  "groups": [
+    {
+      "name": "artifacts",
+      "description": "What a lab holds: its artifacts, their content, types, lineage and claims",
+      "loadAlways": true
+    }
+  ]
+}

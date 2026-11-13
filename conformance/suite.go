@@ -89,8 +89,9 @@ func Suite(t *testing.T) {
 			t.Fatalf("listing shows %d star.* capabilities, Load installed %v", seen, loaded.Capabilities)
 		}
 	})
+	drivers := clientDrivers(t, view)
 	for _, ns := range []string{"test", "star"} {
-		t.Run(ns, func(t *testing.T) { projections(t, r, view, ctx, ns) })
+		t.Run(ns, func(t *testing.T) { projections(t, r, view, ctx, ns, drivers[ns]) })
 	}
 	t.Run("restricted view", func(t *testing.T) { restrictedView(t, r, ctx) })
 }
@@ -158,7 +159,9 @@ func restrictedView(t *testing.T, r *registry.Registry, ctx context.Context) {
 }
 
 // projections runs every projection over the capability set under ns.
-func projections(t *testing.T, r *registry.Registry, view *registry.View, ctx context.Context, ns string) {
+// driver is the program compiled against the generated typed client for
+// that set (clientDrivers); empty when there is no go tool.
+func projections(t *testing.T, r *registry.Registry, view *registry.View, ctx context.Context, ns, driver string) {
 	name := func(n string) string { return ns + "." + n }
 	tool := func(n string) string { return ns + "_" + strings.ReplaceAll(n, ".", "_") }
 	path := func(n string) string { return "/v1/" + ns + "/" + strings.ReplaceAll(n, ".", "/") }
@@ -244,6 +247,8 @@ func projections(t *testing.T, r *registry.Registry, view *registry.View, ctx co
 			return string(raw), err
 		}, name("slow")+"@1", lastStage(ns), "done-go")
 	})
+
+	t.Run("clientgen", func(t *testing.T) { clientgenProjection(t, view, ctx, ns, driver) })
 
 	t.Run("tools", func(t *testing.T) {
 		defs := tools.Defs(view)

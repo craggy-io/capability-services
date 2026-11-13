@@ -4,8 +4,8 @@
 
 capability-services is a small Go library. You register each capability once, and
 it is projected into every surface that needs it: MCP tools for agents, an HTTP
-API, Starlark built-ins, in-process tool-calling loops, and later a CLI or anything
-else. Capabilities can be added, replaced, versioned and superseded while the
+API, Starlark built-ins, in-process tool-calling loops, typed Go client source for
+compiled callers, and later a CLI or anything else. Capabilities can be added, replaced, versioned and superseded while the
 program runs, and every projection follows those changes. Any capability can run
 as a long-running job that reports its status, progress and liveness.
 
@@ -299,6 +299,7 @@ successfully works in every projection.
 | LLM tool (MCP or in-process) | `storage_artifact_get` | not offered: agents always get the current version |
 | HTTP | `POST /v1/storage/artifact/get` | `POST /v1/storage/artifact/get@1` |
 | Starlark | `storage.artifact.get(id = "…")` | `call("storage.artifact.get@1", id = "…")` |
+| Typed Go client | `StorageArtifactGet(ctx, caller, StorageArtifactGetIn{Id: "…"})` | every function calls an exact `name@version`; versions generated together are `…V1`, `…V2` |
 | CLI (later) | `<host> storage artifact get --id …` | `--version 1` |
 
 ### 2.2 Typed registration
@@ -408,6 +409,14 @@ Inputs embed `PageIn`, and outputs are `Page[T]`. `Paginate` slices a stably
 ordered list with an opaque offset cursor. The conformance suite checks that
 paginated capabilities return a `Page` and that following `next` visits each item
 exactly once, through every projection.
+
+The typed-client generator recognises this convention from a descriptor (a
+string `cursor` in, a string `next` and one list out) and generates the
+functions that follow it. It also recognises a second shape, for a window on
+content that is not a list of items, such as a blob's bytes: an integer `offset`
+in, a boolean `eof` and one list or base64 string out
+([typed Go clients](clientgen.md#paged-reads)). Lists and queries still use
+`PageIn` and `Page`.
 
 ### 2.6 Long-running jobs
 
@@ -561,6 +570,7 @@ How each projection handles a `Long` capability:
 | HTTP | `POST` returns `202 {"job": id, "status": …}` with a `Location: /v1/jobs/{id}` header. `GET /v1/jobs/{id}` returns the status (plus the result on success), `GET /v1/jobs/{id}/events` streams events as Server-Sent Events, and `DELETE /v1/jobs/{id}` cancels. Sending `Prefer: wait=N` holds the request for up to N seconds before falling back to 202. |
 | MCP / tools | The tool returns `{"job": id, "status": …}` immediately, and the agent follows up with `jobs_wait`. This works with every client. If the client sent a `progressToken`, updates are also sent as `notifications/progress`. |
 | Starlark | `apk.decompile(...)` blocks, and waiting doesn't count against the script's step limit. `jobs.start("apk.decompile", ...)` returns a job, for scripts that want to run several at once. |
+| Typed Go client | The generated function does what its `Caller` does, and a `Caller` waits: it returns the result. Its doc comment says the capability is long-running. |
 
 ### 2.7 Readiness
 
@@ -859,6 +869,43 @@ registry.
   wider script view. A read-only agent that calls `apk.summary` can't write
   anything through it, whatever the script declares.
 
+### Typed Go client: `clientgen`
+
+```go
+func Generate(descriptors []registry.Descriptor, opts Options) (map[string][]byte, error) // file name -> Go source
+func ParseDescriptors(data []byte) ([]registry.Descriptor, error)                         // a list, or {"capabilities": [...]}
+// Options: Package, Include (refs), Group (OneFile, ByNamespace)
+```
+
+The other projections serve callers that read schemas while they run. A
+compiled caller in another process or module wants them as types, and without
+this it hand-writes a struct for every input and output it uses, which then
+drifts from the provider. This projection generates that code instead. It is
+the one projection that takes descriptors, not a view, and runs nothing: its
+caller may hold only the JSON a provider described itself with.
+
+- **One shape out.** For each capability: a ref constant, an input and an
+  output type from the schemas, and a function
+  `X(ctx, Caller, XIn) (XOut, error)`. `Caller` is a one-method interface the
+  generated package declares (`Call(ctx, ref, in) (json.RawMessage, error)`), so
+  the code imports the standard library only and whatever carries the call
+  implements it.
+- **Names are derived, never chosen.** `artifacts.runs.record-tree` is
+  `ArtifactsRunsRecordTree`; nested types are named from their parent and
+  field. A name derived twice is an error, never a rename.
+- **Schemas map honestly.** What has one Go type gets it (structs in property
+  order with exact tags, `omitempty` for what is not required, slices, maps,
+  `[]byte` for base64 strings, typed string enums, pointers for null, named
+  types for `$defs`). What has none (`oneOf`, open objects, tuples) is
+  `json.RawMessage` or `map[string]any`, and the comment says so.
+- **Paged capabilities get page readers** when the descriptor shows the
+  convention (2.5).
+- **Deterministic.** The same descriptors and options give the same bytes, so
+  a host can key a build by them. The package writes no files; `cmd/clientgen`
+  does, for a person.
+
+See the [typed Go clients guide](clientgen.md).
+
 ### Later, same pattern
 
 - A CLI package that turns a view into subcommands and flags.
@@ -992,6 +1039,8 @@ tools/               LLM tool definitions + tool-result encoding (no provider SD
 mcp/                 MCP projection, built on tools/ (deps: modelcontextprotocol/go-sdk)
 httpapi/             HTTP projection, SSE job events, OpenAPI (stdlib only)
 starlarkcap/         Globals, Exec, Check, Script, Load, Watch, Test (deps: script-services, foundation-kit bundle, go.starlark.net)
+clientgen/           typed Go client source from descriptors (stdlib only; so is the code it generates)
+cmd/clientgen/       the command that writes a generated client into a folder
 conformance/         the suite: one capability set through every projection
 examples/host/       a runnable host wiring fake domains together
 ```
@@ -1030,9 +1079,23 @@ The order the module was built in, and the gate each step had to pass:
 7. **Host plumbing** (outside this module): session mapping, audit middleware,
    injected execution and publication ports.
 8. **Domain adapters** (outside this module).
+9. **Typed client generation.** `clientgen`, held to golden files, to a module
+   that compiles the generated code with the standard library alone and runs
+   it, and to the conformance suite.
 
 ## 8. Changes since the first design
 
+- **Typed client generation (2026-11).** The first design had no code
+  generation: every projection served a caller that reads schemas at run time,
+  and a compiled caller wrote its own structs. The owner decided otherwise once
+  some thirty provider processes each carried a hand-written copy of the same
+  client for the capabilities they call through their host. `clientgen`
+  generates that client from the providers' descriptors, so a caller's source
+  holds only its own code and the client cannot drift from the schemas. It adds
+  no dependency to the core or to the generated code, and it is a projection
+  like the others: a mechanical translation of the one shape (rule 1). Rule 5
+  is unchanged: Go code in the same process still calls the library, not a
+  generated client.
 - **`jobs` package.** The job capabilities moved out of `registry` into their own
   package: `jobs.Capabilities()`, `jobs.Group()` and `jobs.WaitOut`, the
   `jobs.wait` output type.
@@ -1095,6 +1158,9 @@ The order the module was built in, and the gate each step had to pass:
 - **Native MCP tasks.** `jobs_wait` works with every MCP client today. `Serve` can
   switch to native tasks later without any change to capabilities.
 - **`mcp.Import` and a CLI projection** (3, "Later, same pattern").
+- **Typed clients in other languages, and shared types across capabilities.**
+  `clientgen` emits Go, and gives two capabilities with the same nested shape
+  two types: a schema carries no type names to merge them by.
 - **MCP resources and prompts.** These could come later as a second, equally small
   registration shape, if agents need them.
 
@@ -1118,3 +1184,9 @@ The order the module was built in, and the gate each step had to pass:
    remaining exposure is a capability file whose id names a Go namespace, which
    replaces that whole prefix; hosts reserve script bundles for script
    prefixes.
+4. **Declaring paging instead of detecting it.** `clientgen` finds a paged
+   capability by the shape of its schemas (2.5). That is exact for capabilities
+   that follow the convention and declare an output schema, and silent for the
+   rest: a capability with no output schema gets no page readers. Should a
+   capability be able to say it pages (a field of `Capability`, projected in
+   `Descriptor`), so that detection is a declaration every projection can read?

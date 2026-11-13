@@ -8,7 +8,7 @@ import (
 
 // projections are the packages rules 1 and 2 of the AGENTS.md import rules call
 // projections.
-var projections = []string{"./jobs", "./tools", "./mcp", "./httpapi", "./starlarkcap"}
+var projections = []string{"./jobs", "./tools", "./mcp", "./httpapi", "./starlarkcap", "./clientgen"}
 
 // noOtherProjection returns rule 2 for one projection: it imports no other
 // projection, except those listed in allow.
@@ -49,6 +49,16 @@ func TestArchitecture(t *testing.T) {
 			noOtherProjection("./mcp", "./tools"),
 			noOtherProjection("./httpapi"),
 			noOtherProjection("./starlarkcap"),
+			noOtherProjection("./clientgen"),
+			{
+				// The generator reads schemas as JSON and writes source with
+				// go/format: it needs no schema library and no transport.
+				Name:   "clientgen is stdlib plus registry",
+				Why:    "the typed-client generator imports the standard library and registry only, so a host can generate at build time without pulling in a projection's dependencies (docs/clientgen.md)",
+				From:   []string{"./clientgen"},
+				Forbid: []string{archtest.External, "./..."},
+				Allow:  []string{"./registry", "./clientgen"},
+			},
 			{
 				Name:   "rule 3: only starlarkcap imports script-services",
 				Why:    "use the starlarkcap aliases (Position, Limits, Frame) instead (AGENTS.md, Import rules 3)",

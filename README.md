@@ -7,7 +7,8 @@
 
 One registry of capabilities, projected mechanically into every surface that
 needs them: MCP tools for agents, an HTTP API with a generated OpenAPI document,
-Starlark built-ins, and in-process LLM tool-calling loops. Register each capability
+Starlark built-ins, in-process LLM tool-calling loops, and typed Go client source
+for compiled callers. Register each capability
 once. It can be added, replaced, versioned and superseded at runtime, and every
 projection follows. Any call can run as a long-running job with stage progress,
 heartbeat/liveness and cancellation.
@@ -26,6 +27,7 @@ The design is in [docs/design.md](docs/design.md).
 - **Jobs for every call:** [stage progress, heartbeats, stalled detection, cancellation, child jobs](docs/jobs.md) and the `jobs.*` capabilities, with an optional status journal that marks interrupted jobs `lost` after a restart.
 - **Coded errors:** a closed set of codes, optional stable reasons, and one error envelope that [every projection](docs/projections.md#one-error-envelope) carries unchanged.
 - **Capabilities defined in Starlark:** [load, check, hot-reload and test script files](docs/starlark.md) that define capabilities under a prefix, with content digests and recorded provenance. Superseding anything outside the prefix needs the host's explicit policy.
+- **Typed clients for compiled callers:** [generate Go source](docs/clientgen.md) with an input and an output type, a function and a ref constant for each capability, and page readers for the ones that page. The generated code imports the standard library only.
 - **Conformance:** [one capability set, Go- and Starlark-defined, through every projection](docs/conformance.md), requiring identical results, codes, job behaviour and pagination.
 
 ## Package architecture
@@ -52,8 +54,10 @@ also builds on `tools`. `registry` imports none of the other packages.
 | `mcp` | MCP projection on the official Go SDK: live tool sync, progress notifications, per-session `Caller`, `OnClose`. | registry, tools | [Projections](docs/projections.md#mcp) |
 | `httpapi` | HTTP projection: `POST /v1/{ref}`, 202 + `Location`, `Prefer: wait=N`, job status/SSE/cancel, listings, health, OpenAPI 3.1. Standard library only. | registry | [Projections](docs/projections.md#http) |
 | `starlarkcap` | Starlark in both directions: `Globals`, `Exec`, `Check`/`Analyze`, `Load`, `Watch`, `Test`. | registry | [Starlark](docs/starlark.md) |
-| `conformance` | The suite every projection must pass, and the standard fake capability set. | all of the above | [Conformance](docs/conformance.md) |
-| `examples/host` | A runnable host wiring fake domains and a Starlark file that supersedes a Go capability, behind HTTP or MCP stdio. | all but tools, conformance | [Run the example](#run-the-example) |
+| `clientgen` | Typed Go client source from descriptors: types from the schemas, a function and a ref constant per capability, page readers. Standard library only, and so is what it generates. | registry | [Typed Go clients](docs/clientgen.md) |
+| `cmd/clientgen` | The command that writes a generated client into a folder. | clientgen, registry | [Typed Go clients](docs/clientgen.md#public-interfaces) |
+| `conformance` | The suite every projection must pass, and the standard fake capability set. | all of the above but `cmd/clientgen` | [Conformance](docs/conformance.md) |
+| `examples/host` | A runnable host wiring fake domains and a Starlark file that supersedes a Go capability, behind HTTP or MCP stdio. | all but tools, clientgen, conformance | [Run the example](#run-the-example) |
 
 ## Quick start
 

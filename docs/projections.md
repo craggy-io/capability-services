@@ -3,7 +3,8 @@
 [Project](../README.md) · [Documentation index](README.md) · [Design](design.md#3-projections)
 
 Packages `tools`, `mcp` and `httpapi`. Available Go API. The Starlark projection
-has its [own guide](starlark.md).
+has its [own guide](starlark.md), and so has the generator of
+[typed Go clients](clientgen.md), the projection for a compiled caller.
 
 ## Purpose
 

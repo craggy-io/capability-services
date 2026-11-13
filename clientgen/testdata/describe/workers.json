@@ -1,0 +1,607 @@
+{
+  "type": "describe-reply",
+  "id": "d1",
+  "capabilities": [
+    {
+      "name": "workers.do",
+      "version": 1,
+      "title": "Run a worker over lab artifacts",
+      "description": "Run one installed workers.worker@1 definition: stage lab artifacts and caller files under /work/in of a container built from the definition (no network), run its phases, and check its output directory into the lab as one tree artifact, with chosen files also returned inline or checked in as blobs. With deterministic set, an identical earlier run in this lab is returned and nothing runs. Long-running, with per-phase progress; cancelling releases the container.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "worker": {
+            "type": "string",
+            "description": "worker definition id, e.g. craggy.afl"
+          },
+          "inputs": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "role": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "as": {
+                  "type": "string"
+                },
+                "tree": {
+                  "type": "boolean"
+                },
+                "selectPrefix": {
+                  "type": "string"
+                },
+                "maxBytes": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "role",
+                "id",
+                "as"
+              ],
+              "additionalProperties": false
+            },
+            "description": "lab artifacts staged under /work/in; the first is the primary input"
+          },
+          "files": {
+            "type": "object",
+            "description": "files the caller wrote, pushed under /work/in, base64",
+            "additionalProperties": {
+              "type": "string",
+              "contentEncoding": "base64"
+            }
+          },
+          "params": {
+            "description": "run parameters beside the inputs"
+          },
+          "deterministic": {
+            "type": "boolean",
+            "description": "reuse an identical earlier run"
+          },
+          "output": {
+            "type": "string",
+            "description": "tree output name or .suffix"
+          },
+          "cpus": {
+            "type": "number"
+          },
+          "memoryMb": {
+            "type": "integer"
+          },
+          "diskMb": {
+            "type": "integer"
+          },
+          "timeoutMs": {
+            "type": "integer"
+          },
+          "capture": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "output file paths to return inline"
+          },
+          "blobs": {
+            "type": "object",
+            "description": "captured output path to checked-in blob name or .suffix",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "planTree": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "contentEncoding": "base64"
+            }
+          }
+        },
+        "required": [
+          "worker"
+        ],
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "output": {
+            "type": "string",
+            "description": "tree artifact id of the worker's output directory"
+          },
+          "run": {
+            "type": "string",
+            "description": "run id that produced it (the receipt)"
+          },
+          "worker": {
+            "type": "string",
+            "description": "worker definition id"
+          },
+          "digest": {
+            "type": "string",
+            "description": "worker definition and assets digest"
+          },
+          "image": {
+            "type": "string",
+            "description": "immutable image digest the container ran"
+          },
+          "envId": {
+            "type": "string",
+            "description": "environment that ran the job (released afterwards)"
+          },
+          "elapsed": {
+            "type": "string"
+          },
+          "reused": {
+            "type": "boolean",
+            "description": "an identical earlier run's outputs; nothing ran"
+          },
+          "outputs": {
+            "type": "object",
+            "description": "every output by name",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "captured": {
+            "type": "object",
+            "description": "captured output files, base64",
+            "additionalProperties": {
+              "type": "string",
+              "contentEncoding": "base64"
+            }
+          },
+          "primary": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "size": {
+                  "type": "integer"
+                },
+                "digest": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "size",
+                "digest"
+              ],
+              "additionalProperties": false
+            },
+            "description": "the primary input files that were staged"
+          }
+        },
+        "required": [
+          "output",
+          "run",
+          "worker",
+          "digest",
+          "image",
+          "envId",
+          "elapsed",
+          "reused"
+        ],
+        "additionalProperties": false
+      },
+      "tags": [
+        "workers"
+      ],
+      "requires": [
+        "artifacts.files@1",
+        "artifacts.file.read@1",
+        "artifacts.runs.find@1",
+        "artifacts.runs.record-tree@1"
+      ],
+      "long": true
+    },
+    {
+      "name": "workers.exec",
+      "version": 1,
+      "title": "Run a tool worker's command",
+      "description": "Run a tool worker (a definition with no input or output) once: start its container, run its one phase with the arguments appended, and return stdout, stderr and the exit code. A non-zero exit is the caller's to read, not an error. A tool worker may have network egress; its own guard is then the only control over where it connects.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "worker": {
+            "type": "string",
+            "description": "tool worker definition id"
+          },
+          "args": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "arguments appended to the worker's one phase"
+          }
+        },
+        "required": [
+          "worker"
+        ],
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "stdout": {
+            "type": "string",
+            "description": "base64",
+            "contentEncoding": "base64"
+          },
+          "stderr": {
+            "type": "string",
+            "description": "base64",
+            "contentEncoding": "base64"
+          },
+          "exit": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "stdout",
+          "stderr",
+          "exit"
+        ],
+        "additionalProperties": false
+      },
+      "tags": [
+        "workers"
+      ],
+      "long": true
+    },
+    {
+      "name": "workers.list",
+      "version": 1,
+      "title": "List the installed workers",
+      "description": "Every installed worker definition: its id, title, description, what it accepts, whether it is a tool worker, and whether its container image is built.",
+      "input": {
+        "type": "object",
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "workers": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "worker definition id"
+                },
+                "bundle": {
+                  "type": "string",
+                  "description": "the bundle that contributes it"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "capability": {
+                  "type": "string",
+                  "description": "the name its runs are recorded under, name@version"
+                },
+                "accepts": {
+                  "type": "string",
+                  "description": "subject type of its input artifact"
+                },
+                "tool": {
+                  "type": "boolean",
+                  "description": "a tool worker: no input or output, run with workers.exec"
+                },
+                "network": {
+                  "type": "string",
+                  "description": "none or egress"
+                },
+                "digest": {
+                  "type": "string",
+                  "description": "definition and assets digest"
+                },
+                "built": {
+                  "type": "boolean",
+                  "description": "its container image exists; the first run builds one that doesn't"
+                },
+                "reason": {
+                  "type": "string",
+                  "description": "why it is not built or cannot run now"
+                }
+              },
+              "required": [
+                "id",
+                "bundle",
+                "capability",
+                "tool",
+                "network",
+                "digest",
+                "built"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "workers"
+        ],
+        "additionalProperties": false
+      },
+      "effects": [
+        "read_only",
+        "idempotent"
+      ],
+      "tags": [
+        "workers"
+      ]
+    },
+    {
+      "name": "workers.ready",
+      "version": 1,
+      "title": "Whether a worker can run now",
+      "description": "Whether a worker definition is installed and a container runtime answers on this machine. Fails not_found for a definition that is not installed.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "worker": {
+            "type": "string",
+            "description": "worker definition id"
+          }
+        },
+        "required": [
+          "worker"
+        ],
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "ready": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "description": "why it cannot run now"
+          }
+        },
+        "required": [
+          "ready"
+        ],
+        "additionalProperties": false
+      },
+      "effects": [
+        "read_only",
+        "idempotent"
+      ],
+      "tags": [
+        "workers"
+      ]
+    },
+    {
+      "name": "workers.run",
+      "version": 1,
+      "title": "Run a worker over one artifact",
+      "description": "Run an installed worker definition over one lab artifact, staged as the input its definition names. The output directory is checked into the lab as one tree artifact derived from the input, produced by the returned run. Tool workers have no input: use workers.exec. Long-running, with per-phase progress; cancelling releases the container.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "worker": {
+            "type": "string",
+            "description": "worker definition id, e.g. craggy.gitleaks"
+          },
+          "artifact": {
+            "type": "string",
+            "description": "artifact id in the lab: the worker's input"
+          },
+          "params": {
+            "description": "run parameters, recorded with the run"
+          }
+        },
+        "required": [
+          "worker",
+          "artifact"
+        ],
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "output": {
+            "type": "string",
+            "description": "tree artifact id of the worker's output directory"
+          },
+          "run": {
+            "type": "string",
+            "description": "run id that produced it (the receipt)"
+          },
+          "worker": {
+            "type": "string",
+            "description": "worker definition id"
+          },
+          "digest": {
+            "type": "string",
+            "description": "worker definition and assets digest"
+          },
+          "image": {
+            "type": "string",
+            "description": "immutable image digest the container ran"
+          },
+          "envId": {
+            "type": "string",
+            "description": "environment that ran the job (released afterwards)"
+          },
+          "elapsed": {
+            "type": "string"
+          },
+          "reused": {
+            "type": "boolean",
+            "description": "an identical earlier run's outputs; nothing ran"
+          },
+          "outputs": {
+            "type": "object",
+            "description": "every output by name",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "output",
+          "run",
+          "worker",
+          "digest",
+          "image",
+          "envId",
+          "elapsed",
+          "reused"
+        ],
+        "additionalProperties": false
+      },
+      "tags": [
+        "workers"
+      ],
+      "requires": [
+        "artifacts.files@1",
+        "artifacts.file.read@1",
+        "artifacts.runs.find@1",
+        "artifacts.runs.record-tree@1"
+      ],
+      "long": true
+    },
+    {
+      "name": "workers.runs",
+      "version": 1,
+      "title": "List recent worker runs",
+      "description": "The worker runs recorded in this lab, newest first: worker, definition digest, inputs, run id and outputs.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "description": "most runs to return, newest first; 50 when zero"
+          }
+        },
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "runs": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "time": {
+                  "type": "string"
+                },
+                "capability": {
+                  "type": "string",
+                  "description": "the name the run is recorded under, name@version"
+                },
+                "worker": {
+                  "type": "string",
+                  "description": "worker definition id"
+                },
+                "digest": {
+                  "type": "string",
+                  "description": "definition and assets digest"
+                },
+                "inputs": {
+                  "type": [
+                    "null",
+                    "array"
+                  ],
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "role": {
+                        "type": "string"
+                      },
+                      "id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "role",
+                      "id"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "run": {
+                  "type": "string",
+                  "description": "run id in the lab's artifact store"
+                },
+                "outputs": {
+                  "type": "object",
+                  "description": "artifact id of every output by name",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                },
+                "deterministic": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "time",
+                "capability",
+                "worker",
+                "digest",
+                "inputs",
+                "run",
+                "outputs"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "runs"
+        ],
+        "additionalProperties": false
+      },
+      "effects": [
+        "read_only",
+        "idempotent"
+      ],
+      "tags": [
+        "workers"
+      ]
+    }
+  ],
+  "groups": [
+    {
+      "name": "workers",
+      "description": "Pinned tools run in containers over lab artifacts, with the output kept"
+    }
+  ]
+}

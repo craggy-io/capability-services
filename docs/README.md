@@ -32,6 +32,9 @@ Projections:
   share.
 - [Starlark](starlark.md): `starlarkcap` in both directions: `Globals`, `Exec`,
   `Check`/`Analyze`, `Load` and its policy, `Watch`, `Test`, and `Origin`.
+- [Typed Go clients](clientgen.md): `clientgen` turns descriptors into Go source
+  for a compiled caller: the naming scheme, the schema-to-Go rules and their
+  fallbacks, and how a paged capability is detected.
 
 Verification:
 

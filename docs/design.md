@@ -549,7 +549,8 @@ Further:
   it started (`Parent`). The host can replace that rule (`WithJobAccess`).
 - **Durability.** The job table is in memory and keeps finished jobs for a while
   (`KeepJobs`, default 1h). `OpenJobJournal(path)` appends each job's latest status
-  record as events happen; on the next start it restores terminal jobs (their
+  record as events happen, except for `ReadOnly` jobs, which a restart need not
+  account for; on the next start it restores terminal jobs (their
   results remain waitable) and marks unfinished ones `lost` with reason
   `process_restarted`. It never resumes a handler: recovering interrupted work is
   an explicit new call the host coordinates. `JobJournalError` reports a write

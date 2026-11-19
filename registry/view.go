@@ -307,6 +307,9 @@ func (r *Registry) purgeJobs() {
 	r.jobJournalMu.Lock()
 	stale := false
 	for id, j := range r.jobs {
+		if _, kept := seqs[id]; !kept {
+			continue // not journaled: nothing of it to clobber
+		}
 		if !j.mu.TryLock() {
 			stale = true
 			break

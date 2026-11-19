@@ -73,6 +73,9 @@ func (r *Registry) OpenJobJournal(path string) error {
 		if r.cfg.keepJobs > 0 && rec.Status.State.Terminal() && !rec.Status.Ended.IsZero() && rec.Status.Ended.Before(cutoff) {
 			continue // already expired under KeepJobs; don't resurrect it
 		}
+		if !journaled(rec) {
+			continue // written before read-only jobs stopped being journaled
+		}
 		job, err := restoredJob(rec, r.persistJob)
 		if err != nil {
 			return fmt.Errorf("registry: restore job %s: %w", id, err)
@@ -82,16 +85,32 @@ func (r *Registry) OpenJobJournal(path string) error {
 		records = append(records, job.recordLocked())
 		job.mu.Unlock()
 	}
-	if err := writeJobJournalFile(path, records); err != nil {
-		return err
+	// A compaction that fails (on Windows, a backup or indexer holding the
+	// file open refuses the rename) need not stop the host starting: the
+	// expiry sweep retries it, and JobJournalError reports it meanwhile.
+	// Without a sweep nothing would retry, so the failure is returned.
+	compactErr := writeJobJournalFile(path, records)
+	if compactErr != nil && r.cfg.keepJobs <= 0 {
+		return compactErr
 	}
 	r.jobJournalPath = path
 	for id, job := range restored {
 		r.jobs[id] = job
 		advanceJobCounter(id)
 	}
+	if compactErr != nil {
+		r.jobJournalMu.Lock()
+		r.jobJournalErr = compactErr
+		r.jobJournalMu.Unlock()
+	}
 	return nil
 }
+
+// journaled reports whether rec belongs in the job journal. A read-only
+// job is left out: it changed nothing a restart must account for, its
+// caller can repeat it, and a page polling one would otherwise write its
+// whole result to disk on every poll.
+func journaled(rec JobRecord) bool { return !rec.Effects.Has(ReadOnly) }
 
 // JobJournalError reports a write failure encountered after the journal was
 // opened. Jobs keep running, but the host can expose this as a health failure
@@ -185,6 +204,9 @@ func (r *Registry) persistJob(rec JobRecord) {
 		r.putShared(rec)
 		return
 	}
+	if !journaled(rec) {
+		return
+	}
 	r.jobJournalMu.Lock()
 	defer r.jobJournalMu.Unlock()
 	if r.jobJournalPath == "" || r.jobJournalErr != nil {
@@ -207,12 +229,17 @@ func (r *Registry) persistJob(rec JobRecord) {
 	}
 }
 
+// jobRecordsLocked returns the journal's records of the job table: every
+// job the journal keeps.
 func (r *Registry) jobRecordsLocked() []JobRecord {
 	records := make([]JobRecord, 0, len(r.jobs))
 	for _, job := range r.jobs {
 		job.mu.Lock()
-		records = append(records, job.recordLocked())
+		rec := job.recordLocked()
 		job.mu.Unlock()
+		if journaled(rec) {
+			records = append(records, rec)
+		}
 	}
 	return records
 }

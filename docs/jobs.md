@@ -198,9 +198,16 @@ _, err := r.Invoke(bob, "jobs.get", json.RawMessage(`{"id":"`+job.ID()+`"}`)) //
   process-wide counter.
 - **Journal.** `OpenJobJournal(path)` must be called before any job starts. It
   appends one JSON record per job event and compacts the file to one record per job
-  when it opens. Restored terminal jobs keep their results; restored unfinished
-  jobs become `lost` with `internal`/`process_restarted`. After a write failure the
-  journal stops and `JobJournalError` reports it; jobs keep running.
+  when it opens and whenever the `KeepJobs` sweep purges a job. Restored terminal
+  jobs keep their results; restored unfinished jobs become `lost` with
+  `internal`/`process_restarted`. A `ReadOnly` job is never journaled: it changed
+  nothing a restart must account for, its caller can repeat it, and a page that
+  polls one would otherwise write every result to disk. After a restart its ID is
+  `not_found`. After a write failure the journal stops and `JobJournalError`
+  reports it; jobs keep running and the sweep retries the compaction. A compaction
+  that fails when the journal opens (on Windows, a backup holding the file refuses
+  the rename) is handled the same way, so the host still starts; only with no sweep
+  (`KeepJobs` 0 or less) does `OpenJobJournal` return it.
 - **Close** cancels unfinished jobs and waits for their runners, up to
   `JobDrainTimeout` (default 10s; 0 or less does not wait). From the moment it
   starts, `Start` and `Invoke` fail with `unavailable`/`closed`. A job is inserted
@@ -218,6 +225,8 @@ bound (`TestCloseWaitsForJobRunners`, `TestCloseDrainIsBounded`), starts after a
 racing `Close` (`TestStartAfterCloseFails`, `TestStartRacingCloseLeavesNoRunningJob`)
 and the journal
 (`TestJobJournalRestoresRunningJobAsLost`,
-`TestJobJournalRestoresCompletedResultAndAdvancesIDs`). `go test ./jobs` covers the
+`TestJobJournalRestoresCompletedResultAndAdvancesIDs`,
+`TestJobJournalLeavesOutReadOnlyJobs`, and on Windows
+`TestJournalOpensWhileAnotherProcessHoldsIt`). `go test ./jobs` covers the
 capabilities, access rules, the group and reason preservation through
 `jobs.wait`.

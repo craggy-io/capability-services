@@ -3,7 +3,9 @@ package registry
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -106,5 +108,72 @@ func TestJobJournalRestoresCompletedResultAndAdvancesIDs(t *testing.T) {
 	// Let the runner journal its terminal record before TempDir cleanup.
 	if _, err := next.Wait(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A read-only job is not journaled, so a page polling one writes nothing
+// to disk, and one left by an older journal is dropped at the next open.
+func TestJobJournalLeavesOutReadOnlyJobs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "jobs.jsonl")
+	r1 := New()
+	if err := r1.OpenJobJournal(path); err != nil {
+		t.Fatal(err)
+	}
+	read := Func("test.read", "Read", func(context.Context, struct{}) (string, error) {
+		return "a large result", nil
+	}, WithEffects(ReadOnly|Idempotent))
+	write := Func("test.write", "Write", func(context.Context, struct{}) (string, error) {
+		return "done", nil
+	})
+	if err := r1.Add(read, write); err != nil {
+		t.Fatal(err)
+	}
+	run := func(r *Registry, ref string) string {
+		t.Helper()
+		job, err := r.Start(context.Background(), ref, json.RawMessage(`{}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := job.Wait(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		return job.ID()
+	}
+	readID, writeID := run(r1, "test.read"), run(r1, "test.write")
+	r1.Close()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), readID) || strings.Contains(string(data), "a large result") {
+		t.Fatalf("read-only job journaled: %s", data)
+	}
+	if !strings.Contains(string(data), writeID) {
+		t.Fatalf("job with effects not journaled: %s", data)
+	}
+
+	// An older journal that still holds a read-only record.
+	old := JobRecord{Status: JobStatus{ID: "job-999999", Capability: "test.read@1", State: JobSucceeded,
+		Started: time.Now(), Ended: time.Now()}, Result: json.RawMessage(`"stale"`), Effects: ReadOnly}
+	line, err := json.Marshal(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(append(data, line...), '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r2 := New()
+	defer r2.Close()
+	if err := r2.OpenJobJournal(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := r2.Job(old.Status.ID); ok {
+		t.Fatal("read-only job from an older journal was restored")
+	}
+	if _, ok := r2.Job(writeID); !ok {
+		t.Fatal("job with effects was not restored")
+	}
+	if data, _ := os.ReadFile(path); strings.Contains(string(data), "stale") {
+		t.Fatal("compaction kept the read-only record")
 	}
 }

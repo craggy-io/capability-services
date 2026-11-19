@@ -175,8 +175,8 @@ registry after it. `Watcher.Close` may be called from its own `OnResult`.
   Replace the rule with `WithJobAccess`. `View.Job`/`Jobs` trust local Go code and
   apply only the view.
 - Durability: the job table is in memory; finished jobs stay for `KeepJobs`
-  (default 1h). `OpenJobJournal` appends a status record per event and, on the next
-  start, restores terminal jobs (results stay waitable) and marks non-terminal ones
+  (default 1h). `OpenJobJournal` appends a status record per event (never for a
+  `ReadOnly` job) and, on the next start, restores terminal jobs (results stay waitable) and marks non-terminal ones
   `lost` with reason `process_restarted`. It never resumes a handler. Expose
   `JobJournalError()` as a health failure. Anything that must survive a restart
   (outputs, audit records) is the host's to persist before the handler returns.

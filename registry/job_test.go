@@ -511,3 +511,40 @@ func TestReplayCoalescesSameStageProgress(t *testing.T) {
 		t.Fatalf("replay updates = %+v, want push then the last pull (1000)", replay)
 	}
 }
+
+// Every call is a job and finished ones are kept for KeepJobs, so a
+// busy registry holds thousands. Listing them must stay a snapshot of
+// statuses: naming no capability, or one no job ran, must not turn
+// into cloning every capability's schemas per job (the unfiltered
+// view once deep-copied them in Allows, ~13µs and ~11KB per job).
+func BenchmarkJobs(b *testing.B) {
+	r := registry.New()
+	defer r.Close()
+	if err := r.Add(registry.Func("bench.echo", "Echo", func(ctx context.Context, in struct{}) (struct{}, error) {
+		return struct{}{}, nil
+	})); err != nil {
+		b.Fatal(err)
+	}
+	ctx := context.Background()
+	for range 10000 {
+		if _, err := r.Invoke(ctx, "bench.echo@1", json.RawMessage(`{}`)); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.Run("all", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			if got := r.Jobs(registry.JobFilter{}); len(got) != 10000 {
+				b.Fatalf("Jobs returned %d", len(got))
+			}
+		}
+	})
+	b.Run("none-matching", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			if got := r.Jobs(registry.JobFilter{Capability: "bench.other@1"}); len(got) != 0 {
+				b.Fatalf("Jobs returned %d", len(got))
+			}
+		}
+	})
+}

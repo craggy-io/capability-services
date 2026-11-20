@@ -163,7 +163,10 @@ func New(opts ...Option) *Registry {
 		r.sems[tag] = make(chan struct{}, n)
 	}
 	r.snap.Store(emptySnapshot())
-	r.allView = &View{reg: r, filter: All}
+	// A nil filter is the unfiltered view: Allows and All both admit
+	// everything for one, without cloning a capability per check the
+	// way a host filter is handed one.
+	r.allView = &View{reg: r}
 	// The loop also purges finished jobs, so it runs when either periodic
 	// checks or job expiry is enabled; an invoke-only host with
 	// CheckEvery(0) must still honour KeepJobs.
@@ -275,11 +278,10 @@ func (r *Registry) changedChan() <-chan struct{} {
 	return r.changed
 }
 
-// View returns a live, filtered view. A nil filter means All.
+// View returns a live, filtered view. A nil filter, like All, admits
+// everything; it is kept nil so the unfiltered view never clones a
+// capability to ask a host filter about it.
 func (r *Registry) View(f Filter) *View {
-	if f == nil {
-		f = All
-	}
 	return &View{reg: r, filter: f}
 }
 

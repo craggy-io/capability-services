@@ -214,9 +214,8 @@ func (v *View) jobsFiltered(f JobFilter, caller Caller, checkAccess bool) []JobS
 	jobs = append(jobs, v.reg.remoteJobs(local)...)
 	out := []JobStatus{}
 	for _, j := range jobs {
-		if !v.Allows(j.capab) {
-			continue
-		}
+		// The name check is on the stored snapshot, no clone: a job it
+		// excludes never pays for the clone Allows hands a host filter.
 		if f.Capability != "" {
 			okName, err := path.Match(f.Capability, j.capab.Name)
 			if err != nil || !okName {
@@ -224,6 +223,9 @@ func (v *View) jobsFiltered(f JobFilter, caller Caller, checkAccess bool) []JobS
 					continue
 				}
 			}
+		}
+		if !v.Allows(j.capab) {
+			continue
 		}
 		st := j.Status()
 		if f.State != "" && st.State != f.State {

@@ -7,7 +7,8 @@ import "path"
 // and nothing is registered twice.
 type Filter func(Capability) bool
 
-// All admits every capability. The Registry itself acts as View(All).
+// All admits every capability, as a nil filter does. The Registry
+// itself acts as the unfiltered view, with a nil filter.
 func All(Capability) bool { return true }
 
 // Match admits capabilities whose name matches any glob. '*' crosses dots,

@@ -434,3 +434,44 @@ func TestMCPProgressPacedWithinStage(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// With ActForRequestCaller a call whose request carries no signed-in caller
+// (here an in-memory transport, which has no HTTP request) is denied.
+func TestActForRequestCallerDeniesWithoutACaller(t *testing.T) {
+	r := registry.New()
+	t.Cleanup(r.Close)
+	ran := false
+	if err := r.Add(registry.Func("test.touch", "Touch", func(context.Context, struct{}) (struct{}, error) {
+		ran = true
+		return struct{}{}, nil
+	})); err != nil {
+		t.Fatal(err)
+	}
+	server := mcpsdk.NewServer(&mcpsdk.Implementation{Name: "test", Version: "1"}, nil)
+	t.Cleanup(regmcp.Serve(server, r.View(registry.All), regmcp.ActForRequestCaller()))
+	st, ct := mcpsdk.NewInMemoryTransports()
+	ctx := context.Background()
+	ss, err := server.Connect(ctx, st, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ss.Close() })
+	cs, err := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "client", Version: "1"}, nil).Connect(ctx, ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cs.Close() })
+	res, err := cs.CallTool(ctx, &mcpsdk.CallToolParams{Name: "test_touch", Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := ""
+	if len(res.Content) > 0 {
+		if tc, ok := res.Content[0].(*mcpsdk.TextContent); ok {
+			text = tc.Text
+		}
+	}
+	if !res.IsError || ran || !strings.Contains(text, "denied") {
+		t.Fatalf("isError=%v ran=%v text=%q", res.IsError, ran, text)
+	}
+}

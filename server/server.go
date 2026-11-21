@@ -37,6 +37,10 @@ type Config struct {
 	MCP *registry.View
 	// MCPCaller is the caller every MCP call runs as. Kind defaults to "agent".
 	MCPCaller registry.Caller
+	// MCPForCaller makes every MCP call MCPCaller acting for the request's
+	// authenticated caller (its Parent), so each signed-in user's agent sees
+	// what that user may see. It needs Authenticate.
+	MCPForCaller bool
 	// Authenticate is the host's authentication policy. It runs before every
 	// request, including /mcp and Routes. It returns the request's caller, or an
 	// error, which is answered 401 with a denied envelope. Nil means requests are
@@ -66,6 +70,9 @@ func New(cfg Config) (*Server, error) {
 	}
 	if cfg.Addr == "" {
 		cfg.Addr = DefaultAddr
+	}
+	if cfg.MCPForCaller && cfg.Authenticate == nil {
+		return nil, errors.New("server: MCPForCaller needs an Authenticate policy")
 	}
 	if cfg.Authenticate == nil {
 		loopback, err := IsLoopback(cfg.Addr)
@@ -108,7 +115,11 @@ func (s *Server) Close() { s.stopMCP() }
 func (s *Server) mcpHandler() (http.Handler, func()) {
 	sdk := mcpsdk.NewServer(&mcpsdk.Implementation{Name: s.cfg.Name, Version: s.cfg.Version}, nil)
 	caller := s.cfg.MCPCaller
-	stop := mcp.Serve(sdk, s.cfg.MCP, mcp.Caller(func(*mcpsdk.ServerSession) registry.Caller { return caller }))
+	opts := []mcp.Option{mcp.Caller(func(*mcpsdk.ServerSession) registry.Caller { return caller })}
+	if s.cfg.MCPForCaller {
+		opts = append(opts, mcp.ActForRequestCaller())
+	}
+	stop := mcp.Serve(sdk, s.cfg.MCP, opts...)
 	h := mcpsdk.NewStreamableHTTPHandler(func(*http.Request) *mcpsdk.Server { return sdk },
 		&mcpsdk.StreamableHTTPOptions{Logger: s.log, Stateless: true})
 	return http.NewCrossOriginProtection().Handler(h), stop

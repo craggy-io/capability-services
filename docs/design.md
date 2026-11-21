@@ -650,7 +650,8 @@ through `Watch` or by re-listing per request. See the
 
 ```go
 func Serve(s *mcpsdk.Server, v *registry.View, opts ...Option) (stop func())
-// options: Caller(func(*mcpsdk.ServerSession) registry.Caller), OnClose(func(registry.Caller))
+// options: Caller(func(*mcpsdk.ServerSession) registry.Caller), OnClose(func(registry.Caller)),
+//          ActForRequestCaller()
 ```
 
 - **Built on `tools`.** Tool definitions come from `tools.Defs(v)`, and calls go
@@ -664,7 +665,10 @@ func Serve(s *mcpsdk.Server, v *registry.View, opts ...Option) (stop func())
   from the `Caller` option. `OnClose` tells the host when a session that made a
   call ends (section 5). The session's caller is forgotten when it ends whether or
   not `OnClose` is set: a stateless transport makes one short session per request,
-  so leaving it to the hook would leak one entry per call.
+  so leaving it to the hook would leak one entry per call. `ActForRequestCaller`
+  adds, per call, the HTTP request's authenticated caller as the `Parent`, and
+  denies a call that has none: one MCP endpoint then serves every signed-in user
+  as themselves.
 - **Structured output.** A tool whose capability declares an `Output` schema
   advertises it as the tool's `outputSchema`, and a successful call returns the
   output as `structuredContent` beside the text (the MCP spec requires both, and

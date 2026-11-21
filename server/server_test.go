@@ -17,6 +17,7 @@ import (
 	"github.com/craggy-io/capability-services/jobs"
 	"github.com/craggy-io/capability-services/registry"
 	"github.com/craggy-io/capability-services/server"
+	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 type echo struct {
@@ -35,6 +36,14 @@ func testRegistry(t *testing.T) *registry.Registry {
 			func(ctx context.Context, _ struct{}) (echo, error) {
 				c, _ := registry.CallerFrom(ctx)
 				return echo{Message: c.ID}, nil
+			}),
+		registry.Func("test.actingfor", "Return the caller id and whom it acts for",
+			func(ctx context.Context, _ struct{}) (echo, error) {
+				c, _ := registry.CallerFrom(ctx)
+				if c.Parent == nil {
+					return echo{Message: c.ID}, nil
+				}
+				return echo{Message: c.ID + " for " + c.Parent.ID}, nil
 			}),
 	}
 	if err := r.Add(append(caps, jobs.Capabilities()...)...); err != nil {
@@ -228,5 +237,65 @@ func TestMCPMounted(t *testing.T) {
 	resp.Body.Close()
 	if !strings.Contains(string(b), "agent:mcp") {
 		t.Fatalf("mcp call did not run as MCPCaller: %d %s", resp.StatusCode, b)
+	}
+}
+
+// bearer adds a token to every request an MCP client sends.
+type bearer struct{ token string }
+
+func (b bearer) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	r.Header.Set("Authorization", "Bearer "+b.token)
+	return http.DefaultTransport.RoundTrip(r)
+}
+
+// With MCPForCaller each signed-in user's MCP client acts for that user, over
+// the real streamable HTTP transport; without a sign-in there is no MCP.
+func TestMCPForCallerActsForEachUser(t *testing.T) {
+	r := testRegistry(t)
+	auth := func(req *http.Request) (registry.Caller, error) {
+		user, ok := strings.CutPrefix(req.Header.Get("Authorization"), "Bearer ")
+		if !ok || user == "" {
+			return registry.Caller{}, errors.New("signed out")
+		}
+		return registry.Caller{ID: "user:" + user, Kind: "user"}, nil
+	}
+	s, err := server.New(server.Config{API: r.View(registry.All), MCP: r.View(registry.Match("test.*")),
+		MCPCaller: registry.Caller{ID: "agent:mcp"}, MCPForCaller: true, Authenticate: auth, Name: "t", Version: "1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	actingFor := func(token string) (string, error) {
+		client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "agent", Version: "1"}, nil)
+		cs, err := client.Connect(context.Background(), &mcpsdk.StreamableClientTransport{
+			Endpoint: ts.URL + server.MCPPath, HTTPClient: &http.Client{Transport: bearer{token}}}, nil)
+		if err != nil {
+			return "", err
+		}
+		defer cs.Close()
+		res, err := cs.CallTool(context.Background(), &mcpsdk.CallToolParams{Name: "test_actingfor", Arguments: map[string]any{}})
+		if err != nil {
+			return "", err
+		}
+		var out echo
+		raw, _ := json.Marshal(res.StructuredContent)
+		_ = json.Unmarshal(raw, &out)
+		return out.Message, nil
+	}
+	for _, user := range []string{"ann", "bob"} {
+		got, err := actingFor(user)
+		if err != nil || got != "agent:mcp for user:"+user {
+			t.Fatalf("%s: %q %v", user, got, err)
+		}
+	}
+	if _, err := actingFor(""); err == nil {
+		t.Fatal("an MCP client with no sign-in connected")
+	}
+	if _, err := server.New(server.Config{API: r.View(registry.All), MCP: r.View(registry.All), MCPForCaller: true}); err == nil {
+		t.Fatal("MCPForCaller without Authenticate was accepted")
 	}
 }

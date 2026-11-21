@@ -83,6 +83,7 @@ const SlowCall = 5 * time.Second
 func Serve(s *mcpsdk.Server, v *registry.View, opts ...Option) (stop func())
 func Caller(f func(*mcpsdk.ServerSession) registry.Caller) Option
 func OnClose(f func(registry.Caller)) Option
+func ActForRequestCaller() Option
 ```
 
 - `Serve` adds one tool per `tools.Def` and keeps the set in sync on every
@@ -99,6 +100,10 @@ func OnClose(f func(registry.Caller)) Option
   to `agent`, `Session` to the MCP session ID (or a generated `mcp-session-N`), `ID`
   to `agent:<session>`. The session's caller is forgotten when the session ends.
   `OnClose` runs then, for sessions that made at least one call.
+  With `ActForRequestCaller`, each call's caller also gets, as its `Parent`, the
+  caller the HTTP request carries (the host's authentication put it there); a
+  call without one is `denied`. A host serving each signed-in user their own MCP
+  uses it, so the agent sees what that user may see.
 - Progress: when a client sends a `progressToken`, job updates become
   `notifications/progress` with progress values 1, 2, 3, ... (monotonic, no total)
   and the stage, message and counters in the message text, for example
@@ -164,6 +169,8 @@ err := l.Serve(ctx, s)
   when the replay is incomplete, `ready` with the current sequence, then
   `change` events whose `id` is the sequence and `data` the entry JSON.
 - MCP is stateless streamable HTTP at `/mcp`; every call runs as `MCPCaller`.
+  With `MCPForCaller` (it needs `Authenticate`) it runs as `MCPCaller` acting for
+  the request's authenticated caller, its `Parent` (`mcp.ActForRequestCaller`).
 
 ## One error envelope
 

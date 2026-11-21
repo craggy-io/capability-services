@@ -30,11 +30,24 @@ type config struct {
 // ActForRequestCaller runs every call as the session's Caller acting for
 // the caller its HTTP request carries (registry.WithCaller, set by the host's
 // authentication before the MCP handler): that caller becomes the session
-// Caller's Parent, per call. A call whose request carries no caller is
-// denied. Hosts that serve each signed-in user their own MCP use it, so a
+// Caller's Parent, per call. A request caller that is already an agent with a
+// Parent is used as it is: the host named the agent (actingCaller). A call
+// whose request carries no caller is denied. Hosts that serve each signed-in user their own MCP use it, so a
 // user's agent sees what that user may see.
 func ActForRequestCaller() Option {
 	return func(c *config) { c.forRequest = true }
+}
+
+// actingCaller is who a call runs as with ActForRequestCaller: the session's
+// Caller acting for the request's caller, or the request's caller itself when
+// it is already an agent acting for someone, because the host named the agent
+// (for example from the OAuth client its token was issued to).
+func actingCaller(session, request registry.Caller) registry.Caller {
+	if request.Kind == "agent" && request.Parent != nil {
+		return request
+	}
+	session.Parent = &request
+	return session
 }
 
 // Caller sets how a session's registry.Caller is built (once per MCP
@@ -398,11 +411,11 @@ func (sv *server) handlerFor(d tools.Def) mcpsdk.ToolHandler {
 func (sv *server) call(ctx context.Context, req *mcpsdk.CallToolRequest) tools.Result {
 	caller := sv.sessionCaller(req.Session)
 	if sv.cfg.forRequest {
-		parent, ok := registry.CallerFrom(ctx)
+		request, ok := registry.CallerFrom(ctx)
 		if !ok {
 			return tools.ErrorResult(registry.Errorf(registry.Denied, "this MCP call carries no signed-in caller"))
 		}
-		caller.Parent = &parent
+		caller = actingCaller(caller, request)
 	}
 	ctx = registry.WithCaller(ctx, caller)
 	args := req.Params.Arguments

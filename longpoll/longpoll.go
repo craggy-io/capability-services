@@ -1,8 +1,7 @@
 // Package longpoll serves an ordered change log as a capability that waits:
 // a call returns the changes after a position at once, or, when there are
 // none, waits up to MaxWait for one. It works through proxies that buffer
-// responses (Firebase Hosting buffers, so Server-Sent Events do not stream
-// through it) and across instances, when the Source reads shared storage.
+// responses (where Server-Sent Events would not stream) and across instances, when the Source reads shared storage.
 // See docs/longpoll.md.
 package longpoll
 

@@ -15,8 +15,8 @@ assumed one process:
   request-based billing throttles CPU once no request is in flight, so such a goroutine
   stalls.
 - **The change feed** (`server.Events`) is Server-Sent Events over an in-process hub.
-  Firebase Hosting buffers proxied responses, so SSE does not stream through its rewrite,
-  and an in-process hub sees only its own instance's changes.
+  Firebase Hosting, which fronted the services when this was decided, buffered proxied
+  responses, so SSE did not stream through its rewrite; other proxies may too. An in-process hub sees only its own instance's changes.
 
 ## Decision
 

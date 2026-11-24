@@ -357,14 +357,11 @@ func install(r *registry.Registry, f *File, policy registry.Filter, replacing st
 		return Loaded{}, err
 	}
 	all := r.View(registry.All)
-	for _, c := range f.caps {
-		for _, s := range c.Supersedes {
-			if err := maySupersede(all, prefix, c.Name, s, policy); err != nil {
-				return Loaded{}, err
-			}
-		}
+	caps, err := checkedCaps(all, prefix, f.caps, policy)
+	if err != nil {
+		return Loaded{}, err
 	}
-	if err := r.Replace(prefix, slices.Clone(f.caps)...); err != nil {
+	if err := r.Replace(prefix, caps...); err != nil {
 		return Loaded{}, err
 	}
 	l := f.info
@@ -428,15 +425,17 @@ func underPrefix(prefix, name string) bool {
 }
 
 // maySupersede applies the supersession policy to one ref of capability
-// name. A pinned ref is checked against that version; a bare ref
-// supersedes every version, so each registered version must pass. A ref
-// naming nothing registered is denied (fail closed: see
-// LoadOptions.MaySupersede). Malformed refs are left for the registry to
-// reject.
-func maySupersede(all *registry.View, prefix, name, ref string, policy registry.Filter) error {
+// name and returns the refs the installed capability may carry: a bare
+// ref comes back as the pinned refs of exactly the versions checked
+// here, so a version registered later is not superseded without ever
+// passing the policy. A pinned ref is checked against that version. A
+// ref naming nothing registered is denied (fail closed: see
+// LoadOptions.MaySupersede). Malformed refs are left for the registry
+// to reject.
+func maySupersede(all *registry.View, prefix, name, ref string, policy registry.Filter) ([]string, error) {
 	target, _, pinned, ok := registry.ParseRef(ref)
 	if !ok || underPrefix(prefix, target) {
-		return nil
+		return []string{ref}, nil
 	}
 	var targets []registry.Capability
 	if pinned {
@@ -451,20 +450,47 @@ func maySupersede(all *registry.View, prefix, name, ref string, policy registry.
 		}
 	}
 	if len(targets) == 0 {
-		return registry.Errorf(registry.Denied,
+		return nil, registry.Errorf(registry.Denied,
 			"capability %s may not supersede %s: it is outside the prefix %q and is not registered, so LoadOptions.MaySupersede cannot judge it; register the target first", name, ref, prefix)
 	}
+	checked := make([]string, 0, len(targets))
 	for _, c := range targets {
 		if policy == nil || !policy(c) {
 			what := ref
 			if c.Handler != nil && !pinned {
 				what = ref + " (" + c.Ref() + ")"
 			}
-			return registry.Errorf(registry.Denied,
+			return nil, registry.Errorf(registry.Denied,
 				"capability %s may not supersede %s: it is outside the prefix %q and LoadOptions.MaySupersede does not allow it", name, what, prefix)
 		}
+		checked = append(checked, c.Ref())
 	}
-	return nil
+	if pinned {
+		return []string{ref}, nil
+	}
+	return checked, nil
+}
+
+// checkedCaps clones caps with every Supersedes ref replaced by the
+// refs maySupersede checked, under prefix's policy.
+func checkedCaps(all *registry.View, prefix string, caps []registry.Capability, policy registry.Filter) ([]registry.Capability, error) {
+	out := slices.Clone(caps)
+	for i, c := range out {
+		if len(c.Supersedes) == 0 {
+			continue
+		}
+		var refs []string
+		for _, s := range c.Supersedes {
+			got, err := maySupersede(all, prefix, c.Name, s, policy)
+			if err != nil {
+				return nil, err
+			}
+			refs = append(refs, got...)
+		}
+		out[i] = c
+		out[i].Supersedes = refs
+	}
+	return out, nil
 }
 
 // capabilityKwargs is the documented capability(...) parameter set.

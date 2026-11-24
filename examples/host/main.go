@@ -51,8 +51,8 @@ import (
 
 	"github.com/craggy-io/foundation-kit/bundle"
 
-	"github.com/craggy-io/capability-services/httpapi"
 	"github.com/craggy-io/capability-services/jobs"
+	"github.com/craggy-io/capability-services/server"
 	regmcp "github.com/craggy-io/capability-services/mcp"
 	"github.com/craggy-io/capability-services/registry"
 	"github.com/craggy-io/capability-services/starlarkcap"
@@ -170,7 +170,7 @@ func (nopCloser) Close() error { return nil }
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("host", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	addr := flags.String("addr", ":8080", "HTTP listen address")
+	addr := flags.String("addr", "127.0.0.1:8080", "HTTP listen address")
 	useMCP := flags.Bool("mcp", false, "serve MCP over stdio instead of HTTP")
 	scripts := flags.String("scripts", "", "bundle directory (with bundle.yaml) of capability files to load and hot-reload")
 	if err := flags.Parse(args); err != nil {
@@ -288,22 +288,27 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 
 	api := r.View(registry.All)
-	h := httpapi.Handler(api, httpapi.Caller(func(req *http.Request) registry.Caller {
-		if u := req.Header.Get("X-User"); u != "" {
-			return registry.Caller{ID: "user:" + u, Kind: "user"}
-		}
-		return registry.Caller{ID: "user:anonymous", Kind: "user"}
-	}))
-	srv := &http.Server{Addr: *addr, Handler: h}
-	go func() {
-		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(shutdownCtx)
-	}()
-	log.Printf("serving HTTP on %s — open http://localhost%s/v1/ and /v1/openapi.json", *addr, *addr)
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	// Built on server.New like a real host: it refuses a non-loopback
+	// address without an Authenticate policy and guards loopback
+	// requests against DNS rebinding and cross-origin pages. The
+	// X-User header is DEMO identity only — it is not authentication;
+	// a real host verifies a credential in Authenticate.
+	srv, err := server.New(server.Config{
+		Addr: *addr, Name: "craggy-example", Version: "1", API: api,
+		Authenticate: func(req *http.Request) (registry.Caller, error) {
+			if u := req.Header.Get("X-User"); u != "" {
+				return registry.Caller{ID: "user:" + u, Kind: "user"}, nil
+			}
+			return registry.Caller{ID: "user:anonymous", Kind: "user"}, nil
+		},
+	})
+	if err != nil {
 		return err
 	}
-	return nil
+	ln, err := server.Listen(*addr, nil)
+	if err != nil {
+		return err
+	}
+	log.Printf("serving HTTP on %s — open http://%s/v1/ and /v1/openapi.json", *addr, ln.Addr())
+	return ln.Serve(ctx, srv)
 }

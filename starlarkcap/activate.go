@@ -100,14 +100,11 @@ func (a *Activator) Activate(ctx context.Context, cat *bundle.Catalog) Activatio
 		if err := ownPrefix(a.r, prefix, f.info.Ref, owned[prefix]); err != nil {
 			return fail(err)
 		}
-		for _, c := range f.caps {
-			for _, s := range c.Supersedes {
-				if err := maySupersede(all, prefix, c.Name, s, a.opts.MaySupersede); err != nil {
-					return fail(err)
-				}
-			}
+		caps, err := checkedCaps(all, prefix, f.caps, a.opts.MaySupersede)
+		if err != nil {
+			return fail(err)
 		}
-		changes = append(changes, registry.Change{Prefix: prefix, Caps: slices.Clone(f.caps)})
+		changes = append(changes, registry.Change{Prefix: prefix, Caps: caps})
 	}
 	for prefix := range owned {
 		if !present[prefix] {

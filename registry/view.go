@@ -35,8 +35,11 @@ func (v *View) Intersect(other *View) *View {
 		return v
 	}
 	pin := v.pin
-	if pin == nil {
+	switch {
+	case pin == nil:
 		pin = other.pin
+	case other.pin != nil && other.pin != pin:
+		pin = pin.intersect(other.pin)
 	}
 	return &View{reg: v.reg, filter: And(v.filter, other.filter), pin: pin}
 }
@@ -249,16 +252,20 @@ func (r *Registry) jobAllowed(caller Caller, st JobStatus) bool {
 
 // defaultJobAccess: a caller sees jobs from its own Session and from
 // sessions it started (the job caller's Parent chain names this caller by
-// Session or ID).
+// Session or ID). A Session match never suffices when both sides carry
+// IDs that differ: sessions may be client-chosen strings, IDs are not.
 func defaultJobAccess(caller Caller, st JobStatus) bool {
-	if caller.Session != "" && caller.Session == st.Caller.Session {
+	idsAgree := func(id string) bool {
+		return caller.ID == "" || id == "" || caller.ID == id
+	}
+	if caller.Session != "" && caller.Session == st.Caller.Session && idsAgree(st.Caller.ID) {
 		return true
 	}
 	if caller.ID != "" && caller.ID == st.Caller.ID && caller.Session == st.Caller.Session {
 		return true
 	}
 	for p, depth := st.Caller.Parent, 0; p != nil && depth < 32; p, depth = p.Parent, depth+1 {
-		if caller.Session != "" && p.Session == caller.Session {
+		if caller.Session != "" && p.Session == caller.Session && idsAgree(p.ID) {
 			return true
 		}
 		if caller.ID != "" && p.ID == caller.ID {

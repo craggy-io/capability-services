@@ -349,6 +349,14 @@ func (r *Registry) RunTask(ctx context.Context, t Task) error {
 	if !won {
 		return ErrTaskNotQueued
 	}
+	// The stored record, not the delivery, decides what runs and as
+	// whom: a tampered or misrouted task for a queued job ID must not
+	// run a different capability as a different caller under this job.
+	if t.Capability != rec.Status.Capability {
+		err := Errorf(Denied, "task for job %s names %q, but the queued job is %q", t.Job, t.Capability, rec.Status.Capability)
+		r.failRecord(rec, err)
+		return nil
+	}
 	ev := r.allView
 	_, rc, _, found := ev.resolve(t.Capability)
 	if !found || rc.capab.Ref() != t.Capability {
@@ -367,7 +375,7 @@ func (r *Registry) RunTask(ctx context.Context, t Task) error {
 		return nil
 	}
 	job := &Job{
-		id: t.Job, capab: rc.capab, supBy: rec.Status.SupersededBy, caller: cloneCaller(t.Caller), parent: t.Parent,
+		id: t.Job, capab: rc.capab, supBy: rec.Status.SupersededBy, caller: cloneCaller(rec.Status.Caller), parent: rec.Status.Parent,
 		done: make(chan struct{}), state: JobQueued, seq: rec.Status.Seq,
 		started: rec.Status.Started, hbDur: heartbeatOf(rc.capab), subs: map[chan Event]struct{}{}, persist: r.persistJob,
 		history: []Event{{Seq: rec.Status.Seq, Time: rec.Status.Started, State: JobQueued}},

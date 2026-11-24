@@ -128,12 +128,16 @@ func writeResult(w http.ResponseWriter, out json.RawMessage) {
 	writeJSON(w, http.StatusOK, map[string]json.RawMessage{"result": out})
 }
 
+// maxPreferWait caps a Prefer: wait= hold so one client cannot pin an
+// invoke goroutine and connection indefinitely (jobs.wait caps at 60s).
+const maxPreferWait = 60 * time.Second
+
 func parsePreferWait(prefer string) time.Duration {
 	for _, part := range strings.Split(prefer, ",") {
 		part = strings.TrimSpace(part)
 		if strings.HasPrefix(part, "wait=") {
 			if secs, err := strconv.ParseFloat(strings.TrimPrefix(part, "wait="), 64); err == nil && secs > 0 {
-				return time.Duration(secs * float64(time.Second))
+				return min(time.Duration(secs*float64(time.Second)), maxPreferWait)
 			}
 		}
 	}

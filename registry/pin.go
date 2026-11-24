@@ -98,6 +98,23 @@ func (v *View) resolveIn(s *snapshot, ref string) (capKey, resolvedCap, *snapsho
 	return k, rc, s, true
 }
 
+// intersect returns the closure both pins share: capabilities pinned by
+// both, as the same registration. A name pinned at different versions,
+// or as different registrations of one version, is in neither's agreed
+// closure and drops out. The result may not be Requires-closed; a
+// nested call to a dropped entry then fails Denied, which is the
+// never-widen direction Intersect promises.
+func (p *Pinned) intersect(o *Pinned) *Pinned {
+	out := &Pinned{reg: p.reg, snap: p.snap, caps: map[capKey]resolvedCap{}, names: map[string]int{}, calls: map[capKey]bool{}}
+	for k, rc := range p.caps {
+		if orc, ok := o.caps[k]; ok && sameHandler(rc, orc) {
+			out.caps[k] = rc
+			out.names[k.name] = k.version
+		}
+	}
+	return out
+}
+
 // View is the view calls under this closure go through: the pinning view's
 // filter, restricted to the closure. Intersecting it with another view
 // keeps the pin.

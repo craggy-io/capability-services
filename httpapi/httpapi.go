@@ -67,8 +67,14 @@ func (h *handler) callerCtx(r *http.Request) context.Context {
 	// already set: a session from the host's auth wrapper (ctx) or Caller
 	// function is the authenticated one, and letting any client replace
 	// it per request would let it read and cancel another session's jobs.
+	// For an authenticated caller the header value is namespaced by the
+	// caller's ID, so one user who learns another's client-chosen
+	// session string still cannot reach their jobs by replaying it.
 	if caller.Session == "" {
 		caller.Session = r.Header.Get(sessionHeader)
+		if caller.Session != "" && caller.ID != "" {
+			caller.Session = caller.ID + "\x00" + caller.Session
+		}
 	}
 	if !has {
 		// A remote request always carries a Caller — anonymous when the
